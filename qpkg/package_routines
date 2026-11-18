@@ -1,0 +1,27 @@
+######################################################################
+# QDK package routines (see QDK 2.5.3 shared/template/package_routines
+# for the full list of available hooks and variables).
+######################################################################
+
+######################################################################
+# On removal: take the cron entry out. The install dir (config, lego
+# account, certificates) is deleted by QTS with the app.
+######################################################################
+PKG_PRE_REMOVE="{
+	\$SYS_QPKG_DIR/legocert.sh remove
+}"
+
+######################################################################
+# After install/upgrade: tighten permissions on anything that holds
+# secrets. legocert.conf ships as a template; QPKG_CONFIG keeps the
+# installed copy on upgrade.
+######################################################################
+pkg_post_install(){
+	$CMD_MKDIR -p "$SYS_QPKG_DIR/log" "$SYS_QPKG_DIR/data"
+	$CMD_CHMOD 700 "$SYS_QPKG_DIR/data"
+	$CMD_CHOWN 0:0 "$SYS_QPKG_DIR/legocert.conf"
+	$CMD_CHMOD 600 "$SYS_QPKG_DIR/legocert.conf"
+	$CMD_CHMOD 755 "$SYS_QPKG_DIR/legocert.sh" "$SYS_QPKG_DIR/renew.sh" \
+		"$SYS_QPKG_DIR/install-cert.sh" "$SYS_QPKG_DIR/lego" "$SYS_QPKG_DIR/ui/index.cgi"
+	$CMD_CHMOD 644 "$SYS_QPKG_DIR/ui/progress.js"
+}

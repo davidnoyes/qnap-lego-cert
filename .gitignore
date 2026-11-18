@@ -1,0 +1,6 @@
+qpkg/build/
+qpkg/x86_64/lego
+qpkg/arm_64/lego
+*.qpkg
+.DS_Store
+.preview/

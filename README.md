@@ -1,0 +1,121 @@
+# qnap-lego-cert
+
+A QNAP app (QPKG), **LegoCert**, that keeps the QTS web UI certificate valid by itself.
+[lego](https://github.com/go-acme/lego) obtains and renews a Let's Encrypt certificate using
+**Cloudflare DNS-01**. The app installs it into QTS's `/etc/stunnel` and reports problems
+through QNAP's **Notification Center**.
+
+QTS's built-in Let's Encrypt only validates over HTTP (myQNAPcloud DNS or ports 80/443),
+so it can't issue a certificate for an internal-only name like `nas.home.example.com`.
+LegoCert replaces the manual alternative: issuing the certificate elsewhere (e.g. certbot with
+DNS-01 on another machine) and copying it onto the NAS over SSH every few months.
+
+**Security, failure handling and residual risks: [docs/design-review.md](docs/design-review.md).**
+
+## How it works
+
+A daily cron job runs `renew.sh`, which converges the NAS on a valid certificate:
+
+1. **lego run.** Renews into `data/`. It only contacts Let's Encrypt when renewal is due
+   (about 30 days before expiry), so most days it does nothing. The **first** certificate
+   only ever comes from *Renew now* (or `./renew.sh` by hand): scheduled runs (`--auto`)
+   never install one by surprise during setup.
+2. **Reconcile.** If the certificate lego holds differs from the one QTS is serving, and is
+   valid, `install-cert.sh` installs it:
+   - validates it (parses, in date, covers the domain, matches the key);
+   - backs up `/etc/stunnel`;
+   - replaces the files (`backup.cert`, `backup.key`, `stunnel.pem` = key + leaf,
+     `uca.pem` = chain);
+   - restarts thttpd, stunnel and Qthttpd;
+   - waits up to 60 s for QTS to serve the new certificate, and rolls back if it doesn't.
+
+   There's no lego deploy hook. Because this check runs every day, a failed install, or a
+   firmware update that resets `/etc/stunnel`, gets fixed on the next run.
+3. **Expiry check.** Looks at the certificate QTS actually serves: a warning under 21
+   days, an error under 7 days or once expired.
+
+**Settings page.** Opened from App Center (*Open*), administrators only, styled like QTS 5's
+own apps (QuLog Center layout, QTS Font). Sidebar: Overview (certificate status, Test run,
+Renew now), Setup → Cloudflare token (step-by-step, with a *Show my public IP* button for the
+optional IP filter) and Settings (the token is write-only; only its last 4 characters are shown),
+Notifications (the Notification Center rule). Test run and Renew now show their progress as a ball moving along the stages (DNS record, Let's Encrypt check, certificate, install), stopping red with a plain-English reason if something fails; events also go to QuLog Center, and the technical log is a download for troubleshooting. The only script is a small same-origin progress updater; no inline JavaScript. SSH is only needed if this
+firmware doesn't run app pages as root (the page says so).
+
+**Other pieces**
+- **Service script `legocert.sh`.** QTS runs it at boot and when the app is enabled or
+  disabled. It re-adds the cron line to `/etc/config/crontab` on every boot (firmware
+  updates can reset that file), clears any lock left by a power cut, and runs a catch-up
+  check 5 minutes after boot. Disabling or uninstalling removes the cron line.
+- **Notifications.** Written to the QTS system log (QuLog Center) as `[LegoCert] …` at
+  info, warning or error level. A Notification Center rule delivers them (setup below).
+  Days with nothing to do log only to `log/legocert.log`.
+- **Config `legocert.conf`.** Read as `KEY=VALUE` data, never executed. It must be
+  `root:root 0600`, or nothing runs. It's kept across upgrades.
+
+## Build and test
+
+Requires Docker (or Colima) and `shellcheck`.
+
+```sh
+make lint     # shellcheck (QTS scripts as POSIX sh, warning level)
+make test     # run the real scripts under busybox ash with QTS stubbed (tests/harness.sh)
+make build    # fetch + verify lego (LEGO_VERSION), build the QDK image, run qbuild
+# -> qpkg/build/LegoCert_<ver>_x86_64.qpkg and _arm_64.qpkg
+```
+
+- **`make test`** stubs `getcfg`, `log_tool`, the init scripts (stunnel becomes an
+  `openssl s_server`) and lego. It then checks install, no-op runs, repair after a reset,
+  rollback and retry, warning vs error levels, wrong-name refusal, stale and live locks,
+  config injection, permissions, staging, `--check-token`, and that the token stays out of
+  argv and logs.
+- **Updating lego:** lego is pinned in `LEGO_VERSION` and checked against the release's
+  `checksums.txt`. Bump that file and `QPKG_VER` in `qpkg/qpkg.cfg`, then rebuild.
+- **App icon:** `assets/icon.svg` is the source; `scripts/make-icons.sh` renders the three
+  GIFs QTS needs into `qpkg/icons/` (64px, 64px greyed, 80px). Re-run it after editing the SVG.
+- **QDK** 2.5.3 runs in an Ubuntu container (`build-env/`), with the `.deb`'s sha256 pinned.
+- **Inspecting a build:** `qbuild --extract` truncates the data archive when unpacking.
+  Read the gzip streams in the `.qpkg` directly instead.
+
+## Install on the NAS
+
+1. **Allow unsigned apps.** In App Center → Settings → General, tick *Allow installation of
+   applications without a valid digital signature*. Untick it after installing.
+2. App Center → *Install Manually* → `LegoCert_<ver>_x86_64.qpkg` (or `arm_64`, matching the NAS CPU).
+3. **App Center → LegoCert → Open.** The settings page guides the rest:
+   - create the Cloudflare token (step-by-step on the page; full version in
+     [docs/cloudflare-token.md](docs/cloudflare-token.md));
+   - enter the NAS name, email and token, then **Save**;
+   - **Check token**: it should report one domain;
+   - on the Overview, **Test run**, then **Renew now**;
+   - set up the Notification Center rule described on the page.
+4. **Fallback without the page** (SSH as admin):
+   ```sh
+   sudo -i
+   cd "$(getcfg LegoCert Install_Path -f /etc/config/qpkg.conf)"
+   vi legocert.conf && chmod 600 legocert.conf
+   ./renew.sh --check-token && ./renew.sh --staging && ./renew.sh
+   ```
+5. Check that the page shows **Daily check: scheduled**, **reboot the NAS once**, and check again.
+
+**Later** (over SSH, or the page's buttons)
+- `./renew.sh --force` renews now.
+- `./renew.sh --check` reconciles and checks expiry without contacting Cloudflare.
+- `./renew.sh --check-token` re-checks the token, e.g. after rotating it.
+
+## Monitoring from outside
+
+The app can't report that it isn't running (disabled, removed, cron gone). Keep an external
+expiry check. In an uptime monitor such as Gatus, on the NAS endpoint:
+
+```yaml
+conditions:
+  - "[STATUS] == 200"
+  - "[CERTIFICATE_EXPIRATION] > 336h"   # red 14 days before expiry
+```
+
+## Uninstall
+
+App Center → LegoCert → Remove.
+- The cron line is removed.
+- The installed certificate stays in `/etc/stunnel`, with backups in `/etc/stunnel/backups/`.
+- Config, token and the lego account are deleted with the app, so revoke the Cloudflare token too.
