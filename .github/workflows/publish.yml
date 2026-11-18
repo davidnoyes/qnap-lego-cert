@@ -1,0 +1,70 @@
+name: Publish
+
+# Build a released version, attach the packages to its GitHub release, and publish
+# the App Center feed (repo.xml + icons) to GitHub Pages. Called by the release
+# workflow; can also be run by hand for an existing tag.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, e.g. v0.5.5
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Version in qpkg.cfg matches the tag
+        run: |
+          ver=$(sed -n 's/^QPKG_VER="\(.*\)"$/\1/p' qpkg/qpkg.cfg)
+          echo "qpkg.cfg: $ver, tag: $TAG"
+          [ "v$ver" = "$TAG" ]
+
+      - name: Lint, test, build
+        run: |
+          make lint
+          make test
+          make build
+
+      - name: Attach packages to the release
+        run: gh release upload "$TAG" qpkg/build/*.qpkg qpkg/build/*.md5 --clobber
+
+      - name: Build the App Center feed
+        run: scripts/make-repo-xml.sh "$TAG" site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -4,3 +4,5 @@ qpkg/arm_64/lego
 *.qpkg
 .DS_Store
 .preview/
+qpkg/shared/LICENSE.lego
+site/

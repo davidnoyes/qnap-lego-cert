@@ -1,0 +1,44 @@
+name: Release
+
+# release-please keeps a release PR open with the next version and its changelog,
+# built from Conventional Commit messages. Merging it creates the tag and GitHub
+# release; the publish job then builds and attaches the packages and updates the
+# App Center feed.
+#
+# Also runs daily: merges made by GitHub Actions (Dependabot auto-merge) don't
+# trigger push workflows, so the schedule picks those up.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "40 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}

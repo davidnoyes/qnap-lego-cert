@@ -1,0 +1,39 @@
+name: Dependabot auto-merge
+
+# Squash-merge a Dependabot PR once CI has passed on it. Runs from main's copy of
+# this workflow (workflow_run), so it has a write token without trusting PR code.
+# The release workflow's daily run then turns merged dependency updates into a
+# release PR (lego updates are fix(deps): a patch release).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Merge the PR CI just passed
+        run: |
+          pr=$(gh pr list --repo "$REPO" --state open --head "$BRANCH" \
+            --json number,author,headRefOid \
+            --jq '.[] | select(.author.login == "app/dependabot" and .headRefOid == env.HEAD_SHA) | .number')
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot PR at $HEAD_SHA on $BRANCH (already merged or updated since)."
+            exit 0
+          fi
+          gh pr merge "$pr" --repo "$REPO" --squash --delete-branch

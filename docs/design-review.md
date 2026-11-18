@@ -101,7 +101,7 @@ remains the fallback.
 
 | Input | Control |
 |---|---|
-| lego binary | Pinned version (`LEGO_VERSION`), downloaded from the go-acme GitHub release, sha256 checked against the release checksums before packaging |
+| lego binary | Pinned version (`tools/go.mod`, updated by Dependabot), downloaded from the go-acme GitHub release, sha256 checked against the release checksums before packaging |
 | QDK | Pinned 2.5.3, `.deb` sha256 checked in the build image |
 | Ubuntu / Alpine base images | Version tag only, not digest. Used only to build and test, never shipped. Acceptable |
 | The `.qpkg` itself | Unsigned (QNAP signing is internal to QNAP). Built locally from this repo |

@@ -1,0 +1,5 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependencies here are kept up to date by Dependabot (.github/dependabot.yml).",
+  "enabled": false
+}

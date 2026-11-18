@@ -7,7 +7,7 @@ build: fetch image
 	docker run --rm -v "$(CURDIR)/qpkg:/src" $(IMAGE)
 	@ls -l qpkg/build/
 
-## fetch: download + verify the pinned lego binaries (see LEGO_VERSION)
+## fetch: download + verify the pinned lego binaries (version from tools/go.mod)
 fetch:
 	scripts/fetch-lego.sh
 

@@ -59,7 +59,7 @@ Requires Docker (or Colima) and `shellcheck`.
 ```sh
 make lint     # shellcheck (QTS scripts as POSIX sh, warning level)
 make test     # run the real scripts under busybox ash with QTS stubbed (tests/harness.sh)
-make build    # fetch + verify lego (LEGO_VERSION), build the QDK image, run qbuild
+make build    # fetch + verify lego (version from tools/go.mod), build the QDK image, run qbuild
 # -> qpkg/build/LegoCert_<ver>_x86_64.qpkg and _arm_64.qpkg
 ```
 
@@ -68,19 +68,45 @@ make build    # fetch + verify lego (LEGO_VERSION), build the QDK image, run qbu
   rollback and retry, warning vs error levels, wrong-name refusal, stale and live locks,
   config injection, permissions, staging, `--check-token`, and that the token stays out of
   argv and logs.
-- **Updating lego:** lego is pinned in `LEGO_VERSION` and checked against the release's
-  `checksums.txt`. Bump that file and `QPKG_VER` in `qpkg/qpkg.cfg`, then rebuild.
+- **Updating lego:** the version lives in `tools/go.mod` (a module that is never built, only
+  read, so Dependabot can propose updates). Downloads are checked against the release's
+  `checksums.txt`, and lego's licence ships in the package as `LICENSE.lego`.
 - **App icon:** `assets/icon.svg` is the source; `scripts/make-icons.sh` renders the three
   GIFs QTS needs into `qpkg/icons/` (64px, 64px greyed, 80px). Re-run it after editing the SVG.
 - **QDK** 2.5.3 runs in an Ubuntu container (`build-env/`), with the `.deb`'s sha256 pinned.
 - **Inspecting a build:** `qbuild --extract` truncates the data archive when unpacking.
   Read the gzip streams in the `.qpkg` directly instead.
 
+## Releases, changelog and updates
+
+- **Versions and changelog** come from [release-please](https://github.com/googleapis/release-please):
+  commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat: …`, `fix: …`, `docs: …`). release-please keeps a release PR open with the next
+  version and its [CHANGELOG.md](CHANGELOG.md) entry; merging it tags the release.
+- **Publishing:** a release builds both packages in CI (after lint and tests), attaches them
+  to the GitHub release, and updates the App Center feed on GitHub Pages
+  (`repo.xml`), so NAS boxes that added the repository see the update.
+- **Dependencies:** Dependabot proposes updates for lego (`tools/go.mod`, as `fix(deps)`:
+  a patch release), the QDK build image and the workflow actions (`chore(deps)`: no release).
+  Its PRs merge themselves once CI passes; the release workflow's daily run turns merged
+  lego updates into a release PR. QDK itself (pinned with a checksum in `build-env/`) is
+  updated by hand.
+- **CI** (`.github/workflows/ci.yml`) runs `make lint`, `make test` and `make build` on every
+  push and pull request.
+
 ## Install on the NAS
 
-1. **Allow unsigned apps.** In App Center → Settings → General, tick *Allow installation of
-   applications without a valid digital signature*. Untick it after installing.
-2. App Center → *Install Manually* → `LegoCert_<ver>_x86_64.qpkg` (or `arm_64`, matching the NAS CPU).
+1. **Allow unsigned apps.** LegoCert isn't signed by QNAP (only QNAP can sign). In App Center
+   → ⚙ Settings → General, tick *Allow installation of applications without a valid digital
+   signature*.
+2. **Add the LegoCert repository** (recommended). App Center → ⚙ Settings → *App Repository*
+   → *Add*: name `LegoCert`, URL `https://davidnoyes.github.io/qnap-lego-cert/repo.xml`.
+   LegoCert then appears in App Center (under *LegoCert*); install it from there. New
+   versions show up in App Center as updates, like QNAP's own apps.
+
+   *Or install manually:* download `LegoCert_<version>_x86_64.qpkg` (or `arm_64`, matching
+   the NAS CPU) from [Releases](https://github.com/davidnoyes/qnap-lego-cert/releases), then
+   App Center → *Install Manually*.
 3. **App Center → LegoCert → Open.** The settings page guides the rest:
    - create the Cloudflare token (step-by-step on the page; full version in
      [docs/cloudflare-token.md](docs/cloudflare-token.md));
