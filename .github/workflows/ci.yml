@@ -33,7 +33,7 @@ jobs:
     # Let's Encrypt's test ACME server. They gate Dependabot's lego updates.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: lego flags and variables
         run: make lego-flags
       - name: End to end against Pebble
