@@ -130,6 +130,10 @@ run_lego() { # run_lego DATA_DIR SERVER
 	# scheduled renewals everywhere don't hit Let's Encrypt at the same moment. Keep
 	# that for scheduled runs; skip it when someone has just clicked a button.
 	[ "$AUTO" = 1 ] || set -- "$@" --no-random-sleep
+	# Test runs give up Let's Encrypt's approval of the name afterwards, so the next test
+	# has to prove it again through Cloudflare (otherwise it is reused for ~30 days and a
+	# test would not exercise the DNS record or the token at all).
+	[ "${DEACTIVATE:-0}" = 1 ] && set -- "$@" --always-deactivate-authorizations
 	log "lego $*"
 	if [ -n "$CF_ZONE_TOKEN" ]; then
 		CLOUDFLARE_DNS_API_TOKEN=$CF_DNS_TOKEN CLOUDFLARE_ZONE_API_TOKEN=$CF_ZONE_TOKEN \
@@ -152,9 +156,15 @@ if [ "$MODE" = staging ]; then
 	# Always a full issuance: a test that lego skips ("not due yet") proves nothing.
 	# Safe on staging: separate rate limits, and nothing is installed.
 	FORCE=1
+	DEACTIVATE=1
 	mkdir -p "$QPKG_ROOT/data-staging" && chmod 700 "$QPKG_ROOT/data-staging"
+	log_mark=$(wc -l <"$LOG" 2>/dev/null || echo 0)
 	if run_lego "$QPKG_ROOT/data-staging" letsencrypt-staging; then
-		notify info "Test run OK: Let's Encrypt's test service issued a certificate for $DOMAIN (nothing installed)"
+		if tail -n +"$((log_mark + 1))" "$LOG" | grep -q 'Authorization is already valid'; then
+			notify info "Test run OK, partly: Let's Encrypt reused a recent check, so the Cloudflare DNS step was skipped this time. Run the test again for a full check."
+		else
+			notify info "Test run OK: Let's Encrypt's test service issued a certificate for $DOMAIN (nothing installed)"
+		fi
 		exit 0
 	fi
 	notify error "Test run FAILED for $DOMAIN; see the LegoCert log"

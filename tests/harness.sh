@@ -300,6 +300,7 @@ check "old certificate still served" [ "$(served_fp)" = "$(fp "$FIX/old.leaf")" 
 check "used staging server and separate storage" grep -q "letsencrypt-staging --path /qpkg/data-staging" /tmp/lego_calls
 check "staging always forces a full issuance" grep -q "letsencrypt-staging.*--renew-force" /tmp/lego_calls
 check "button runs skip lego's random delay" grep -q "letsencrypt-staging.*--no-random-sleep" /tmp/lego_calls
+check "Test run gives up the approval afterwards (next test is a full check)" grep -q "letsencrypt-staging.*--always-deactivate-authorizations" /tmp/lego_calls
 check "log names it 'Test run' when it starts" grep -q "Test run started" "$ROOT/log/legocert.log"
 check "...and when it ends" grep -q "Test run OK" "$ROOT/log/legocert.log"
 
@@ -462,6 +463,8 @@ printf '2026-11-18T15:02:30Z INFO  The server validated our request.\n2026-11-18
 kill "$live"; rm -rf "$ROOT/.lock"
 s=$(st)
 check "Test run OK -> done, green" sh -c '[ "$1" = ok ] && [ "$2" = 4 ]' _ "$(stv "$s" state)" "$(stv "$s" idx)"
+: >"$LOGF"; printf '2026-11-18 20:31:05 Test run started\nINFO  Authorization is already valid; skipping the challenge.\n2026-11-18 20:31:09 [info] Test run OK, partly: x\n' >>"$LOGF"
+check "reused approval -> says it was only partly checked" sh -c 'printf "%s" "$1" | grep -q "Partly checked"' _ "$(stv "$(st)" msg)"
 : >"$LOGF"
 printf '2026-11-18 15:10:00 Renew now started\n2026-11-18 15:10:00 lego run --server letsencrypt\nINFO  Skip renewal: The certificate expires at 2027-01-21T13:56:50Z, the renewal can be performed in 42d14h54m. \n2026-11-18 15:10:01 Renew now finished OK\n' >>"$LOGF"
 s=$(st)

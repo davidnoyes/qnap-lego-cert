@@ -459,7 +459,14 @@ run_status() {
 		has 'dns01: preparing to solve' && ST_IDX=1
 		has 'waiting for record propagation' && ST_IDX=2
 		has 'The server validated our request' && ST_IDX=3
-		if has 'Test run OK'; then ST_IDX=4 ST_STATE=ok ST_MSG="Everything works. Let's Encrypt's test service issued a certificate (nothing was installed)."; fi
+		if has 'Test run OK'; then
+			ST_IDX=4 ST_STATE=ok
+			if has 'Authorization is already valid'; then
+				ST_MSG="Partly checked: Let's Encrypt reused a recent check, so the Cloudflare DNS step was skipped. Run the test again for a full check."
+			else
+				ST_MSG="Everything works. Let's Encrypt's test service issued a certificate (nothing was installed)."
+			fi
+		fi
 	else
 		ST_STAGES="Starting|Renewal due?|DNS record|Let's Encrypt check|Certificate|Installing|Done"
 		has 'lego run' && ST_IDX=1
