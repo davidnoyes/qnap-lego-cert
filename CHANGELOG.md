@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.6](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.5...v0.5.6) (2026-11-18)
+
+
+### Bug Fixes
+
+* expiry warnings follow each certificate's lifetime ([a22e3f4](https://github.com/davidnoyes/qnap-lego-cert/commit/a22e3f494411db365d0785d7b430e82ccb0cd52f))
+* short App Center name with the version, listed under Security ([823a106](https://github.com/davidnoyes/qnap-lego-cert/commit/823a106755d4c5ad39f3dfeb310ba5745733f673))
+
 ## [0.5.5](https://github.com/davidnoyes/qnap-lego-cert/releases/tag/v0.5.5) (2026-11-18)
 
 First public release. Earlier versions were developed and tested on a single NAS.
