@@ -174,6 +174,7 @@ if [ "$MODE" = normal ] && [ "$AUTO" = 1 ] && [ ! -s "$STORED_CERT" ]; then
 	# setting up never triggers an install (and QTS web restart) by surprise.
 	log "no LegoCert certificate yet: use Renew now to get the first one"
 elif [ "$MODE" = normal ]; then
+	log_mark=$(wc -l <"$LOG" 2>/dev/null || echo 0)
 	run_lego "$DATA" "$ACME_SERVER"
 	lego_rc=$?
 fi
@@ -229,5 +230,15 @@ if [ "$lego_rc" != 0 ]; then
 	status=1
 fi
 
+# Someone pressed Renew now: always leave a system-log entry saying what happened, even
+# when nothing was due (an install already sent its own). Scheduled checks stay quiet.
+if [ "$status" = 0 ] && [ "$AUTO" = 0 ] && [ "$MODE" = normal ] && [ "$lego_rc" = 0 ]; then
+	days=$(tail -n +"$((${log_mark:-0} + 1))" "$LOG" | sed -n 's/.*Skip renewal:.*can be performed in \([0-9]*\)d.*/\1/p' | head -n 1)
+	if [ -n "$days" ]; then
+		notify info "Renew now: not due yet, nothing to do. Renews automatically in about $days days."
+	elif ! tail -n +"$((${log_mark:-0} + 1))" "$LOG" | grep -q "installed a new certificate"; then
+		notify info "Renew now: the certificate is up to date."
+	fi
+fi
 [ "$status" = 0 ] && log "$RUN_NAME finished OK"
 exit "$status"

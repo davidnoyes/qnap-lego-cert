@@ -78,6 +78,10 @@ while [ $# -gt 0 ]; do
 	case $1 in --path) path=$2; shift ;; --domains) dom=$2; shift ;; esac
 	shift
 done
+if [ -f /fixtures/skip ]; then
+	echo "INFO  Skip renewal: The certificate expires at 2027-02-16T11:42:55Z, the renewal can be performed in 59d15h11m19s. cert-name=$dom"
+	exit 0
+fi
 if [ -f /fixtures/next.crt ]; then
 	mkdir -p "$path/certificates"
 	cp /fixtures/next.crt "$path/certificates/$dom.crt"
@@ -142,9 +146,9 @@ check "token reached lego via env" grep -q "token_in_env: yes" /tmp/lego_calls
 check "token not on lego's command line" sh -c '! grep -q tok_ABC /tmp/lego_calls'
 check "token not in the log" sh -c "! grep -rq tok_ABC $ROOT/log"
 
-section "2. second run with nothing to do is silent"
+section "2. scheduled check with nothing to do is silent"
 rm -f "$SYSLOG"
-"$ROOT/renew.sh"; rc=$?
+"$ROOT/renew.sh" --auto; rc=$?
 check "exit 0" [ "$rc" = 0 ]
 check "no notifications" [ ! -s "$SYSLOG" ]
 
@@ -245,6 +249,17 @@ rm -f /tmp/lego_calls
 "$ROOT/renew.sh" --auto
 check "...after which scheduled runs do renew" [ -e /tmp/lego_calls ]
 check "scheduled runs keep lego's random delay" sh -c '! grep -q -- "--no-random-sleep" /tmp/lego_calls'
+
+section "11e. Renew now leaves a system-log entry even when nothing is due"
+reset_box old; issue new
+"$ROOT/renew.sh"            # first certificate (installs; its own info entry)
+rm -f "$SYSLOG"; touch "$FIX/skip"
+"$ROOT/renew.sh"
+check "not due -> info entry with days to go" grep -q "type=0 \[LegoCert\] Renew now: not due yet, nothing to do. Renews automatically in about 59 days." "$SYSLOG"
+rm -f "$SYSLOG"
+"$ROOT/renew.sh" --auto
+check "scheduled not-due check stays quiet" [ ! -s "$SYSLOG" ]
+rm -f "$FIX/skip"
 
 section "11d. a button run that finds another run busy says so"
 reset_box old
