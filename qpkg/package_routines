@@ -12,15 +12,28 @@ PKG_PRE_REMOVE="{
 }"
 
 ######################################################################
-# After install/upgrade: tighten permissions on anything that holds
-# secrets. legocert.conf ships as a template; QPKG_CONFIG keeps the
-# installed copy on upgrade.
+# After install/upgrade:
+#  - legocert.conf is NOT in the package (see qpkg.cfg): create it from the
+#    example on first install only, so upgrades never touch the settings;
+#  - recover settings that QDK moved to legocert.conf.qdksave (0.5.2 shipped
+#    a changed template, which made the installer swap the user's file out);
+#  - tighten permissions on anything that holds secrets.
 ######################################################################
 pkg_post_install(){
+	conf="$SYS_QPKG_DIR/legocert.conf"
+	saved="$SYS_QPKG_DIR/legocert.conf.qdksave"
 	$CMD_MKDIR -p "$SYS_QPKG_DIR/log" "$SYS_QPKG_DIR/data"
 	$CMD_CHMOD 700 "$SYS_QPKG_DIR/data"
-	$CMD_CHOWN 0:0 "$SYS_QPKG_DIR/legocert.conf"
-	$CMD_CHMOD 600 "$SYS_QPKG_DIR/legocert.conf"
+	if ! $CMD_GREP -q '^CLOUDFLARE_DNS_API_TOKEN=..*' "$conf" 2>/dev/null &&
+		$CMD_GREP -q '^CLOUDFLARE_DNS_API_TOKEN=..*' "$saved" 2>/dev/null; then
+		$CMD_CP "$saved" "$conf"
+		$CMD_MV "$saved" "$saved.restored"
+		$CMD_ECHO "$($CMD_DATE '+%Y-%m-%d %H:%M:%S') settings restored from legocert.conf.qdksave" >>"$SYS_QPKG_DIR/log/legocert.log"
+	fi
+	[ -f "$conf" ] || $CMD_CP "$SYS_QPKG_DIR/legocert.conf.example" "$conf"
+	$CMD_CHOWN 0:0 "$conf"
+	$CMD_CHMOD 600 "$conf"
+	[ -f "$saved.restored" ] && $CMD_CHMOD 600 "$saved.restored"
 	$CMD_CHMOD 755 "$SYS_QPKG_DIR/legocert.sh" "$SYS_QPKG_DIR/renew.sh" \
 		"$SYS_QPKG_DIR/install-cert.sh" "$SYS_QPKG_DIR/lego" "$SYS_QPKG_DIR/ui/index.cgi"
 	$CMD_CHMOD 644 "$SYS_QPKG_DIR/ui/progress.js"

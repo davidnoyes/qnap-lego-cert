@@ -170,6 +170,13 @@ weeks before the certificate does.
 - 0.3.3 opens the page in a QTS desktop window (`QPKG_DESKTOP_APP="1"`, 1100x600) like
   QNAP's own apps, instead of a new browser tab.
 
+- **Settings lost on upgrade to 0.5.2** (found on the NAS): QDK's installer replaces a
+  `QPKG_CONFIG` file when the shipped template changes, moving the user's copy to
+  `legocert.conf.qdksave`. 0.5.2 had changed the template (blank default NAS name). Fixed in
+  0.5.4: the package ships only `legocert.conf.example`; `pkg_post_install` creates
+  `legocert.conf` on first install and restores a `.qdksave` that holds a token. Never
+  reintroduce `QPKG_CONFIG` for files users edit.
+
 ## Still to verify on the NAS
 
 - Settings page: runs as root, authenticates via `authLogin.cgi` on loopback, opens from App

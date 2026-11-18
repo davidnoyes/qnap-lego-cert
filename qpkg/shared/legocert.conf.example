@@ -1,6 +1,7 @@
-# LegoCert configuration (<install dir>/legocert.conf). Must be root:root 0600.
+# LegoCert configuration template. The live file is <install dir>/legocert.conf (created
+# from this on first install, never replaced by upgrades). Must be root:root 0600.
 # Read as KEY=VALUE data, never executed: one setting per line, no trailing
-# comments. Unknown keys are an error. Kept across app upgrades (QPKG_CONFIG).
+# comments. Unknown keys are an error.
 
 # Name the QTS web UI is reached by, e.g. nas.example.com (set in the settings page).
 DOMAIN=

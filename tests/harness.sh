@@ -269,6 +269,30 @@ mkdir -p "$ROOT/.lock"; echo "$live" >"$ROOT/.lock/pid"
 kill "$live"; rm -rf "$ROOT/.lock"
 check "Test run skip is visible in the log" grep -q "Test run skipped: another run is in progress. Try again" "$ROOT/log/legocert.log"
 
+section "11f. install/upgrade settings handling (package_routines)"
+post_install() { # post_install DIR: run pkg_post_install the way QDK's qinstall.sh does
+	(CMD_GREP=grep CMD_ECHO=echo CMD_DATE=date CMD_CP=cp CMD_MV=mv CMD_CHOWN=chown CMD_CHMOD=chmod CMD_MKDIR=mkdir SYS_QPKG_DIR=$1
+	 . /src/qpkg/package_routines; pkg_post_install)
+}
+P=/tmp/pkg; rm -rf $P; mkdir -p $P/ui; cp -r /src/qpkg/shared/. $P/; touch $P/lego
+post_install $P
+check "fresh install: settings created from the example" cmp -s $P/legocert.conf $P/legocert.conf.example
+check "...root 600" [ "$(stat -c '%a %u' $P/legocert.conf)" = "600 0" ]
+# 0.5.2's situation: QDK swapped the user's file for the blank template
+cp $P/legocert.conf.example $P/legocert.conf
+printf 'DOMAIN=nas.example.com\nEMAIL=a@b.co\nCLOUDFLARE_DNS_API_TOKEN=cfut_saved\n' >$P/legocert.conf.qdksave
+post_install $P
+check "settings recovered from legocert.conf.qdksave" grep -q '^CLOUDFLARE_DNS_API_TOKEN=cfut_saved$' $P/legocert.conf
+check "...qdksave set aside, not reused" sh -c '[ ! -e "$1/legocert.conf.qdksave" ] && [ -e "$1/legocert.conf.qdksave.restored" ]' _ $P
+check "...and noted in the log" grep -q "settings restored from legocert.conf.qdksave" $P/log/legocert.log
+# a later upgrade with valid settings and a stray qdksave: keep the current settings
+printf 'DOMAIN=nas.example.com\nEMAIL=a@b.co\nCLOUDFLARE_DNS_API_TOKEN=cfut_current\n' >$P/legocert.conf
+printf 'CLOUDFLARE_DNS_API_TOKEN=cfut_old\n' >$P/legocert.conf.qdksave
+post_install $P
+check "upgrade keeps current settings" grep -q '^CLOUDFLARE_DNS_API_TOKEN=cfut_current$' $P/legocert.conf
+check "the package no longer ships legocert.conf" [ ! -e /src/qpkg/shared/legocert.conf ]
+check "qpkg.cfg has no QPKG_CONFIG" sh -c '! grep -q "^QPKG_CONFIG=" /src/qpkg/qpkg.cfg'
+
 section "12. staging run installs nothing"
 reset_box old; issue new
 "$ROOT/renew.sh" --staging
