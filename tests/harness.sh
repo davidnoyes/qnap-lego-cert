@@ -313,6 +313,7 @@ post_install $P
 check "upgrade keeps current settings" grep -q '^CLOUDFLARE_DNS_API_TOKEN=cfut_current$' $P/legocert.conf
 check "the package no longer ships legocert.conf" [ ! -e /src/qpkg/shared/legocert.conf ]
 check "qpkg.cfg has no QPKG_CONFIG" sh -c '! grep -q "^QPKG_CONFIG=" /src/qpkg/qpkg.cfg'
+check "App Center name is short and carries the version" sh -c 'v=$(sed -n "s/^QPKG_VER=\"\(.*\)\"$/\1/p" /src/qpkg/qpkg.cfg); grep -qx "QPKG_DISPLAY_NAME=\"LegoCert $v\"" /src/qpkg/qpkg.cfg'
 
 section "12. staging run installs nothing"
 reset_box old; issue new

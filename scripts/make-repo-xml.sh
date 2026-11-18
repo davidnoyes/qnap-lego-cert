@@ -43,11 +43,11 @@ cp assets/icon_80.png assets/icon_100.png "$out"/
 <plugins>
   <cachechk>$(date -u +%Y%m%d%H%M%S)</cachechk>
   <item>
-    <name>LegoCert</name>
+    <name>LegoCert ${version}</name>
     <internalName>LegoCert</internalName>
     <changeLog>https://github.com/${repo}/releases/tag/${tag}</changeLog>
-    <category>LegoCert</category>
-    <type>Utilities</type>
+    <category>Security</category>
+    <type>Security</type>
     <icon80>${pages}/icon_80.png</icon80>
     <icon100>${pages}/icon_100.png</icon100>
     <description><![CDATA[Keeps the QTS web certificate valid with Let's Encrypt, using Cloudflare DNS validation, so it works for internal names that QTS's built-in Let's Encrypt can't do. Renews automatically, installs the certificate into QTS, and reports problems to Notification Center.]]></description>
