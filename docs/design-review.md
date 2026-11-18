@@ -97,6 +97,19 @@ that `authLogin.cgi?sid=` answers on loopback with `authPassed`/`isAdmin`; and t
 format of that response. If the check doesn't pass, the page fails closed (401), and SSH
 remains the fallback.
 
+## Testing against the real lego
+
+`tests/harness.sh` fakes lego, so it can't notice lego itself changing. Two more checks run
+the real binary in CI (and gate Dependabot's lego updates):
+
+- `make lego-flags`: every flag `renew.sh` passes, the `cloudflare` and `exec` providers, and
+  the Cloudflare variable names.
+- `make e2e`: LegoCert end to end against Pebble with lego's `exec` DNS provider (two test-only
+  variables in `renew.sh`, `LEGOCERT_TEST_DNS_PROVIDER` and `LEGOCERT_TEST_STAGING_SERVER`,
+  never set in normal use). It found, before any user did: Pebble's 6-day profile tripping
+  LegoCert's fixed 7-day expiry error, which led to expiry warnings relative to each
+  certificate's lifetime (Let's Encrypt is moving to shorter certificates).
+
 ## Supply chain
 
 | Input | Control |

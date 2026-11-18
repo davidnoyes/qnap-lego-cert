@@ -1,0 +1,47 @@
+# End-to-end test: LegoCert's real scripts and the REAL lego binary against Pebble,
+# Let's Encrypt's test ACME server, which really validates DNS-01 challenges through
+# pebble-challtestsrv (a test DNS server). Run with `make e2e`.
+#
+# Pinned images; Dependabot (docker-compose) keeps them current.
+name: legocert-e2e
+
+networks:
+  e2e:
+    ipam:
+      config:
+        - subnet: 10.77.0.0/24
+
+services:
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:2.10.3
+    command: ["-dnsserver", ":8053", "-management", ":8055", "-http01", "", "-https01", "", "-tlsalpn01", "", "-doh", "", "-defaultIPv6", ""]
+    networks:
+      e2e:
+        ipv4_address: 10.77.0.2
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:2.10.3
+    # Pebble's own config with only its 90-day profile: unconfigured, Pebble picks
+    # between that and a 6-day profile, which made the run unpredictable.
+    command: ["-config", "/config/pebble-config.json", "-dnsserver", "10.77.0.2:8053"]
+    volumes:
+      - ./pebble-config.json:/config/pebble-config.json:ro
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"        # no artificial validation delays
+      PEBBLE_WFE_NONCEREJECT: "0"   # no random bad-nonce rejections
+      PEBBLE_AUTHZREUSE: "100"      # always reuse a valid authorization (like Let's Encrypt)
+    networks:
+      e2e:
+        ipv4_address: 10.77.0.3
+        aliases: [pebble]
+    depends_on: [challtestsrv]
+
+  legocert:
+    image: alpine:3.22
+    command: ["sh", "/src/tests/e2e/inner.sh"]
+    volumes:
+      - ../..:/src:ro
+    networks:
+      e2e:
+        ipv4_address: 10.77.0.10
+    depends_on: [pebble]

@@ -6,3 +6,4 @@ qpkg/arm_64/lego
 .preview/
 qpkg/shared/LICENSE.lego
 site/
+tests/e2e/.pebble-minica.pem

@@ -57,8 +57,10 @@ firmware doesn't run app pages as root (the page says so).
 Requires Docker (or Colima) and `shellcheck`.
 
 ```sh
-make lint     # shellcheck (QTS scripts as POSIX sh, warning level)
-make test     # run the real scripts under busybox ash with QTS stubbed (tests/harness.sh)
+make lint        # shellcheck (QTS scripts as POSIX sh, warning level)
+make test        # the real scripts under busybox ash, QTS and lego stubbed (tests/harness.sh)
+make lego-flags  # the REAL lego binary still has every flag and variable LegoCert uses
+make e2e         # LegoCert + the REAL lego against Pebble, Let's Encrypt's test ACME server
 make build    # fetch + verify lego (version from tools/go.mod), build the QDK image, run qbuild
 # -> qpkg/build/LegoCert_<ver>_x86_64.qpkg and _arm_64.qpkg
 ```
@@ -68,6 +70,13 @@ make build    # fetch + verify lego (version from tools/go.mod), build the QDK i
   rollback and retry, warning vs error levels, wrong-name refusal, stale and live locks,
   config injection, permissions, staging, `--check-token`, and that the token stays out of
   argv and logs.
+- **`make e2e`** (tests/e2e) starts Pebble and pebble-challtestsrv (a test DNS server) with
+  Docker Compose and runs LegoCert's real scripts with the real lego, using lego's `exec` DNS
+  provider in place of Cloudflare. It checks a first certificate is issued through DNS-01 and
+  installed, that lego still writes every log line the progress line reads, not-due and
+  forced renewals, that consecutive Test runs each do the full DNS check, and that scheduled
+  checks stay quiet. CI runs it on every change, so a lego update that changes behaviour
+  fails before Dependabot can merge it.
 - **Updating lego:** the version lives in `tools/go.mod` (a module that is never built, only
   read, so Dependabot can propose updates). Downloads are checked against the release's
   `checksums.txt`, and lego's licence ships in the package as `LICENSE.lego`.
