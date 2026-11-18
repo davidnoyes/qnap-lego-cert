@@ -1,5 +1,5 @@
 # Build environment for qbuild (QNAP's QDK) on Linux.
-FROM docker.io/library/ubuntu:24.04
+FROM docker.io/library/ubuntu:25.10
 
 ARG QDK_VERSION=2.5.3
 # sha256 of the QDK 2.5.3 release .debs, checked before install.
