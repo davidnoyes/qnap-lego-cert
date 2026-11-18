@@ -19,6 +19,8 @@ QPKG_ROOT=$(/sbin/getcfg "$QPKG_NAME" Install_Path -f /etc/config/qpkg.conf)
 . "$QPKG_ROOT/common.sh"
 
 SELF=/cgi-bin/qpkg/LegoCert/index.cgi
+TMP_PEM=$(mktemp) || TMP_PEM=/tmp/legocert-ui.$$
+trap 'rm -f "$TMP_PEM"' EXIT
 RESTART_NOTE="<b>Expect a short interruption when a new certificate is installed.</b> The NAS web interface restarts, and QTS may show <i>&ldquo;The server is busy or the network is disconnected&rdquo;</i> for up to a minute. Wait, then reload the page. This also happens when the daily check renews the certificate, about every 60 days."
 CSRF_KEY="$QPKG_ROOT/.csrf_key"
 
@@ -295,7 +297,8 @@ tab_overview() {
 			fi
 			if ! printf '%s\n' "$pem" | openssl x509 -noout -checkend 0 >/dev/null 2>&1; then
 				state='<span class="dot err"></span>Expired'
-			elif ! printf '%s\n' "$pem" | openssl x509 -noout -checkend 1814400 >/dev/null 2>&1; then
+			elif printf '%s\n' "$pem" >"$TMP_PEM" && cert_times "$TMP_PEM" && [ "$CERT_LEFT" -lt $((CERT_LIFE / 4)) ]; then
+				# same rule as renew.sh: under a quarter of its lifetime left = overdue
 				state='<span class="dot warn"></span>Expires soon'
 			else
 				state='<span class="dot ok"></span>Valid'

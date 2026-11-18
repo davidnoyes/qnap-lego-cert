@@ -28,6 +28,12 @@ QPKG_ROOT=$(/sbin/getcfg "$QPKG_NAME" Install_Path -f /etc/config/qpkg.conf)
 
 LEGO_TIMEOUT=900 # seconds; lego is killed if it hangs past this
 
+# Test hooks for tests/e2e (real lego against Pebble). Never set in normal use: cron
+# and the service script don't set them, and a web request can't (CGI only passes
+# request headers as HTTP_* variables).
+DNS_PROVIDER=${LEGOCERT_TEST_DNS_PROVIDER:-cloudflare}
+STAGING_SERVER=${LEGOCERT_TEST_STAGING_SERVER:-letsencrypt-staging}
+
 MODE=normal
 FORCE=0
 AUTO=0
@@ -124,7 +130,7 @@ trim_log
 run_lego() { # run_lego DATA_DIR SERVER
 	set -- run --accept-tos --email "$EMAIL" --domains "$DOMAIN" \
 		--server "$2" --path "$1" \
-		--dns cloudflare --dns.resolvers "$DNS_RESOLVERS"
+		--dns "$DNS_PROVIDER" --dns.resolvers "$DNS_RESOLVERS"
 	[ "$FORCE" = 1 ] && set -- "$@" --renew-force
 	# lego waits a random 0-8 min before renewing when not on a terminal, so that
 	# scheduled renewals everywhere don't hit Let's Encrypt at the same moment. Keep
@@ -159,7 +165,7 @@ if [ "$MODE" = staging ]; then
 	DEACTIVATE=1
 	mkdir -p "$QPKG_ROOT/data-staging" && chmod 700 "$QPKG_ROOT/data-staging"
 	log_mark=$(wc -l <"$LOG" 2>/dev/null || echo 0)
-	if run_lego "$QPKG_ROOT/data-staging" letsencrypt-staging; then
+	if run_lego "$QPKG_ROOT/data-staging" "$STAGING_SERVER"; then
 		if tail -n +"$((log_mark + 1))" "$LOG" | grep -q 'Authorization is already valid'; then
 			notify info "Test run OK, partly: Let's Encrypt reused a recent check, so the Cloudflare DNS step was skipped this time. Run the test again for a full check."
 		else
@@ -215,27 +221,35 @@ elif [ "$MODE" = normal ] && [ "$lego_rc" = 0 ]; then
 fi
 
 # --- 3. expiry of what QTS actually serves --------------------------------------
-days_ok() { openssl x509 -noout -checkend $(($1 * 86400)) -in "$TMP/served.pem" >/dev/null 2>&1; }
+# Relative to the certificate's own lifetime (see cert_times in common.sh): lego renews
+# with a third left, so under a quarter means renewals are failing.
+served_level=ok
 if [ ! -s "$TMP/served.pem" ]; then
 	notify error "could not read the certificate QTS serves on port $HTTPS_PORT"
+	served_level=error
 	status=1
-elif ! days_ok 0; then
-	notify error "the certificate QTS serves for $DOMAIN has EXPIRED"
-	status=1
-elif ! days_ok 7; then
-	notify error "the certificate QTS serves for $DOMAIN expires within 7 days"
-	status=1
-elif ! days_ok 21; then
-	# lego renews ~30 days out, so this means renewals have been failing.
-	notify warn "the certificate QTS serves for $DOMAIN expires within 21 days"
+else
+	cert_times "$TMP/served.pem"
+	left=$(human_left "$CERT_LEFT")
+	if [ "$CERT_LEFT" -le 0 ]; then
+		notify error "the certificate QTS serves for $DOMAIN has EXPIRED"
+		served_level=error
+	elif [ "$CERT_LEFT" -lt $((CERT_LIFE / 8)) ]; then
+		notify error "the certificate QTS serves for $DOMAIN expires in $left and has not been renewed"
+		served_level=error
+	elif [ "$CERT_LEFT" -lt $((CERT_LIFE / 4)) ]; then
+		notify warn "the certificate QTS serves for $DOMAIN expires in $left; renewal is overdue"
+		served_level=warn
+	fi
+	[ "$served_level" = error ] && status=1
 fi
 
 # --- report lego failures, graded by how much time is left ----------------------
 if [ "$lego_rc" != 0 ]; then
-	if [ -s "$TMP/served.pem" ] && days_ok 14; then
-		notify warn "renewal attempt failed (lego exit $lego_rc); will retry tomorrow. See $LOG"
+	if [ "$served_level" = error ]; then
+		notify error "renewal failed (lego exit $lego_rc) and the certificate expires soon. See the LegoCert log"
 	else
-		notify error "renewal failed (lego exit $lego_rc) and the certificate expires within 14 days. See $LOG"
+		notify warn "renewal attempt failed (lego exit $lego_rc); will retry tomorrow. See the LegoCert log"
 	fi
 	status=1
 fi

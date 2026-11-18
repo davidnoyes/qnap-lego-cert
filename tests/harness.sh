@@ -96,19 +96,26 @@ cd "$FIX" || exit 1
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 	-keyout ca.key -out ca.pem -days 30 -subj /CN=test-ca 2>/dev/null
 printf 'subjectAltName=DNS:%s\n' "$DOMAIN" >san.ext
-mkcert() { # mkcert NAME DAYS [CN]
+mkcert() { # mkcert NAME LIFETIME_DAYS [CN] [DAYS_ALREADY_USED]
 	openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 		-keyout "$1.key" -out "$1.csr" -subj "/CN=${3:-$DOMAIN}" 2>/dev/null
 	ext=san.ext
 	if [ -n "${3:-}" ]; then printf 'subjectAltName=DNS:%s\n' "$3" >"$1.ext"; ext="$1.ext"; fi
+	used=${4:-0} now=$(date +%s)
+	nb=$(date -u -d "@$((now - used * 86400))" +%Y%m%d%H%M%SZ)
+	na=$(date -u -d "@$((now + ($2 - used) * 86400))" +%Y%m%d%H%M%SZ)
 	openssl x509 -req -in "$1.csr" -CA ca.pem -CAkey ca.key -CAcreateserial \
-		-days "$2" -extfile "$ext" -out "$1.leaf" 2>/dev/null
+		-not_before "$nb" -not_after "$na" -extfile "$ext" -out "$1.leaf" 2>/dev/null
 	cat "$1.leaf" ca.pem >"$1.crt"
 	cat "$1.key" "$1.leaf" >"$1.pem"
 }
 mkcert old 60
 mkcert new 90
 mkcert short 5
+mkcert late 90 "" 85      # 90-day certificate, 5 days left: renewals have failed
+mkcert overdue 90 "" 70   # 20 days left: past lego's renewal point (30), under a quarter
+mkcert six 6              # a fresh 6-day (short-lived) certificate
+mkcert fortyfive 45 "" 25 # 45-day certificate, 20 days left: before lego's renewal point
 mkcert wrongname 90 other.example.com
 fp() { openssl x509 -noout -fingerprint -sha256 -in "$1"; }
 served_fp() { echo | openssl s_client -connect 127.0.0.1:8443 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null; }
@@ -176,11 +183,25 @@ check "exit non-zero" [ "$rc" != 0 ]
 check "warning (not error)" syslog_has "type=1 .*renewal attempt failed"
 check "no error" sh -c "! grep -q 'type=2' $SYSLOG"
 
-section "6. lego fails, certificate expiring in 5 days -> errors"
-reset_box short; echo 1 >"$FIX/lego_rc"
+section "6. lego fails, 90-day certificate with 5 days left -> errors"
+reset_box late; echo 1 >"$FIX/lego_rc"
 "$ROOT/renew.sh"
-check "expiry error" syslog_has "type=2 .*expires within 7 days"
-check "renewal error" syslog_has "type=2 .*renewal failed .*within 14 days"
+check "expiry error" syslog_has "type=2 .*expires in 5 days and has not been renewed"
+check "renewal error" syslog_has "type=2 .*renewal failed .*expires soon"
+
+section "6b. expiry warnings follow the certificate's own lifetime"
+for c in six fortyfive; do
+	reset_box $c; rm -f "$SYSLOG"
+	"$ROOT/renew.sh" --check
+	check "fresh/healthy short-lived certificate ($c): no warning" sh -c "! grep -q 'type=[12]' $SYSLOG"
+done
+reset_box overdue; rm -f "$SYSLOG"
+"$ROOT/renew.sh" --check
+check "90-day certificate with 20 days left: warning, renewal overdue" syslog_has "type=1 .*expires in 20 days; renewal is overdue"
+check "...not an error" sh -c "! grep -q 'type=2' $SYSLOG"
+reset_box short; rm -f "$SYSLOG"
+"$ROOT/renew.sh" --check
+check "fresh 5-day certificate: no warning (it isn't overdue)" sh -c "! grep -q 'type=[12]' $SYSLOG"
 
 section "7. certificate for the wrong name is refused"
 reset_box old; issue wrongname

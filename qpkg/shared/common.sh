@@ -203,3 +203,50 @@ served_cert() {
 	echo | openssl s_client -connect "127.0.0.1:$HTTPS_PORT" -servername "$DOMAIN" 2>/dev/null |
 		openssl x509 2>/dev/null
 }
+
+# --- certificate lifetime ---------------------------------------------------------
+# Expiry warnings are relative to each certificate's own lifetime, not fixed days:
+# Let's Encrypt is moving from 90-day to shorter certificates (45 days, and optional
+# 6-day ones). lego renews when a third of the lifetime is left, so:
+#   less than 1/4 left -> warning (renewal is overdue)
+#   less than 1/8 left -> error
+
+# openssl_date_epoch "Nov 24 22:35:53 2026 GMT" -> seconds since the epoch. Plain awk:
+# QTS's busybox date can't parse openssl's format.
+openssl_date_epoch() {
+	printf '%s\n' "$1" | awk '{
+		mon = (index("JanFebMarAprMayJunJulAugSepOctNovDec", $1) + 2) / 3
+		split($3, t, ":"); d = $2 + 0; y = $4 + 0
+		yy = y - (mon <= 2); era = int(yy / 400); yoe = yy - era * 400
+		doy = int((153 * ((mon + 9) % 12) + 2) / 5) + d - 1
+		doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+		printf "%d\n", (era * 146097 + doe - 719468) * 86400 + t[1] * 3600 + t[2] * 60 + t[3] }'
+}
+
+# shellcheck disable=SC2034  # CERT_LIFE/CERT_LEFT are read by renew.sh and the UI
+# cert_times PEMFILE: sets CERT_LIFE (seconds, notBefore..notAfter) and CERT_LEFT
+# (seconds until notAfter; negative once expired). Falls back to a 90-day lifetime.
+cert_times() {
+	nb=$(openssl x509 -noout -startdate -in "$1" 2>/dev/null | cut -d= -f2)
+	na=$(openssl x509 -noout -enddate -in "$1" 2>/dev/null | cut -d= -f2)
+	if [ -n "$nb" ] && [ -n "$na" ]; then
+		nb=$(openssl_date_epoch "$nb") na=$(openssl_date_epoch "$na")
+		CERT_LIFE=$((na - nb))
+		CERT_LEFT=$((na - $(date +%s)))
+	else
+		CERT_LIFE=7776000 CERT_LEFT=0
+	fi
+	[ "$CERT_LIFE" -gt 0 ] || CERT_LIFE=7776000
+}
+
+# human_left SECONDS -> "12 days", "2 days", "18 hours"
+human_left() {
+	if [ "$1" -ge 172800 ]; then
+		echo "$((($1 + 43200) / 86400)) days" # to the nearest day
+	elif [ "$1" -ge 3600 ]; then
+		echo "$((($1 + 1800) / 3600)) hours"
+	else
+		echo "less than an hour"
+	fi
+}
+
