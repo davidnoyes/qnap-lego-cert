@@ -37,7 +37,7 @@ services:
     depends_on: [challtestsrv]
 
   legocert:
-    image: alpine:3.22
+    image: alpine:3.24
     command: ["sh", "/src/tests/e2e/inner.sh"]
     volumes:
       - ../..:/src:ro
