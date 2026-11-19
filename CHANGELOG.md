@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.1](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.6.0...v0.6.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **ui:** choosing a DNS provider shows it at once; nothing changes until Apply ([1c106b4](https://github.com/davidnoyes/qnap-lego-cert/commit/1c106b40f6be305c30c1473e15f7dea8138c4d8b))
+
+
+### Documentation
+
+* App Center only re-reads repository feeds on its own schedule; how to check now ([3c8b491](https://github.com/davidnoyes/qnap-lego-cert/commit/3c8b491c95a6c11811f769d385783e6f239a1a61))
+
 ## [0.6.0](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.7...v0.6.0) (2026-11-19)
 
 
