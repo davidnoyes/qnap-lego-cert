@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.7](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.6...v0.5.7) (2026-11-19)
+
+
+### Bug Fixes
+
+* **ui:** drop the stale "Progress shows under Run now" from run messages ([9aa9ac2](https://github.com/davidnoyes/qnap-lego-cert/commit/9aa9ac24a5687814b768f4796219bd03ebec1385))
+* **ui:** show the version in the app window, plain name in App Center ([3e70ae0](https://github.com/davidnoyes/qnap-lego-cert/commit/3e70ae04f1425e0c141e6e7eecf2d954b7e81af4))
+
 ## [0.5.6](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.5...v0.5.6) (2026-11-18)
 
 
