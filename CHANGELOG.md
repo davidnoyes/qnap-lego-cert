@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.7...v0.6.0) (2026-11-19)
+
+
+### Features
+
+* choose the DNS provider: Cloudflare, DuckDNS, Porkbun, Route 53, DigitalOcean, Hetzner, OVHcloud, Gandi, deSEC, or any lego provider ([7df289e](https://github.com/davidnoyes/qnap-lego-cert/commit/7df289ed4fc52194935031e2746f7e9912fafbd1))
+
 ## [0.5.7](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.5.6...v0.5.7) (2026-11-19)
 
 
