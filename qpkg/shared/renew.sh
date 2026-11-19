@@ -15,12 +15,12 @@
 #                       LegoCert already has; never gets the first one by itself, so
 #                       nothing is installed (and QTS restarted) during setup
 #   renew.sh --force    renew with lego now, whatever the expiry
-#   renew.sh --check    skip lego: reconcile + expiry check only (no network to Cloudflare)
+#   renew.sh --check    skip lego: reconcile + expiry check only (no DNS provider)
 #   renew.sh --staging  lego against Let's Encrypt staging into data-staging/;
 #                       installs nothing (a staging certificate is untrusted)
 #   renew.sh --check-token
-#                       ask Cloudflare whether the token is active and which zones
-#                       it can see; changes nothing (docs/cloudflare-token.md)
+#                       Cloudflare only: ask whether the token is active and which
+#                       zones it can see; changes nothing (docs/cloudflare-token.md)
 
 QPKG_NAME=LegoCert
 QPKG_ROOT=$(/sbin/getcfg "$QPKG_NAME" Install_Path -f /etc/config/qpkg.conf)
@@ -31,7 +31,7 @@ LEGO_TIMEOUT=900 # seconds; lego is killed if it hangs past this
 # Test hooks for tests/e2e (real lego against Pebble). Never set in normal use: cron
 # and the service script don't set them, and a web request can't (CGI only passes
 # request headers as HTTP_* variables).
-DNS_PROVIDER=${LEGOCERT_TEST_DNS_PROVIDER:-cloudflare}
+TEST_DNS_PROVIDER=${LEGOCERT_TEST_DNS_PROVIDER:-}
 STAGING_SERVER=${LEGOCERT_TEST_STAGING_SERVER:-letsencrypt-staging}
 
 MODE=normal
@@ -53,7 +53,7 @@ done
 
 # A fresh install runs a catch-up check before anyone has opened Settings. That is
 # not a fault: note it in our own log only, so Notification Center stays quiet.
-if [ "$MODE" != token ] && read_conf 2>/dev/null && [ -z "$EMAIL" ] && [ -z "$CF_DNS_TOKEN" ]; then
+if [ "$MODE" != token ] && read_conf 2>/dev/null && [ -z "$EMAIL" ] && [ -z "$CREDS" ]; then
 	log "not set up yet (open LegoCert to configure); nothing to do"
 	exit 0
 fi
@@ -63,6 +63,7 @@ if ! load_conf; then
 	notify error "configuration problem; nothing renewed or checked (details: $LOG)"
 	exit 1
 fi
+[ -z "$TEST_DNS_PROVIDER" ] || DNS_PROVIDER=$TEST_DNS_PROVIDER
 
 # --- check-token: interactive, read-only ---------------------------------------
 # The token goes to curl in a config file on stdin (printf is a shell builtin), so
@@ -72,8 +73,12 @@ cf_get() { # cf_get TOKEN PATH
 		curl -sS -m 20 -K - "https://api.cloudflare.com/client/v4$2" 2>&1
 }
 if [ "$MODE" = token ]; then
+	if [ "$DNS_PROVIDER" != cloudflare ]; then
+		echo "Check token is for Cloudflare. For $(provider_label "$DNS_PROVIDER"), use Test run."
+		exit 2
+	fi
 	rc=0
-	out=$(cf_get "$CF_DNS_TOKEN" /user/tokens/verify)
+	out=$(cf_get "$(cred_get CLOUDFLARE_DNS_API_TOKEN)" /user/tokens/verify)
 	if printf '%s' "$out" | grep -q '"status" *: *"active"'; then
 		echo "token: active"
 	else
@@ -83,7 +88,8 @@ if [ "$MODE" = token ]; then
 		exit 1
 	fi
 	# Zones the token can read (with a separate zone token, that one does the lookup).
-	ztoken=${CF_ZONE_TOKEN:-$CF_DNS_TOKEN}
+	ztoken=$(cred_get CLOUDFLARE_ZONE_API_TOKEN)
+	ztoken=${ztoken:-$(cred_get CLOUDFLARE_DNS_API_TOKEN)}
 	zones=$(cf_get "$ztoken" "/zones?per_page=50" | tr '{' '\n' |
 		grep -o '"name" *: *"[^" ]*\.[^" ]*" *, *"status"' | cut -d'"' -f4 | sort -u)
 	n=$(printf '%s' "$zones" | grep -c .)
@@ -125,8 +131,15 @@ log "$RUN_NAME started"
 trap release_lock EXIT INT TERM
 trim_log
 
-# Run lego with the token in its environment only: not exported to this shell,
-# never on a command line (where ps would show it).
+# Replace every credential value (from the environment, named in LEGOCERT_REDACT) in
+# lego's output with [redacted]. Values under 4 characters are left alone.
+REDACT_AWK='BEGIN { n = split(ENVIRON["LEGOCERT_REDACT"], names, " ")
+	for (i = 1; i <= n; i++) { v = ENVIRON[names[i]]; if (length(v) >= 4) vals[++m] = v } }
+{ for (i = 1; i <= m; i++) while ((p = index($0, vals[i])) > 0) $0 = substr($0, 1, p - 1) "[redacted]" substr($0, p + length(vals[i]))
+  print; fflush() }'
+
+# Run lego with the credentials in its environment only: exported in a subshell
+# that becomes lego, never on a command line (where ps would show them).
 run_lego() { # run_lego DATA_DIR SERVER
 	set -- run --accept-tos --email "$EMAIL" --domains "$DOMAIN" \
 		--server "$2" --path "$1" \
@@ -137,27 +150,44 @@ run_lego() { # run_lego DATA_DIR SERVER
 	# that for scheduled runs; skip it when someone has just clicked a button.
 	[ "$AUTO" = 1 ] || set -- "$@" --no-random-sleep
 	# Test runs give up Let's Encrypt's approval of the name afterwards, so the next test
-	# has to prove it again through Cloudflare (otherwise it is reused for ~30 days and a
+	# has to prove it again through the DNS provider (otherwise it is reused for ~30 days and a
 	# test would not exercise the DNS record or the token at all).
 	[ "${DEACTIVATE:-0}" = 1 ] && set -- "$@" --always-deactivate-authorizations
 	log "lego $*"
-	if [ -n "$CF_ZONE_TOKEN" ]; then
-		CLOUDFLARE_DNS_API_TOKEN=$CF_DNS_TOKEN CLOUDFLARE_ZONE_API_TOKEN=$CF_ZONE_TOKEN \
-			"$QPKG_ROOT/lego" "$@" >>"$LOG" 2>&1 &
+	# lego's messages can quote a credential (DuckDNS's token is part of the URL it
+	# prints on errors), so its output reaches the log through a redactor.
+	fifo="$QPKG_ROOT/.lego-out.$$"
+	rm -f "$fifo"
+	redact_pid=""
+	if mkfifo -m 600 "$fifo" 2>/dev/null; then
+		(
+			export_creds
+			LEGOCERT_REDACT=$(cred_names)
+			export LEGOCERT_REDACT
+			exec awk "$REDACT_AWK"
+		) <"$fifo" >>"$LOG" 2>&1 &
+		redact_pid=$!
+		out=$fifo
 	else
-		CLOUDFLARE_DNS_API_TOKEN=$CF_DNS_TOKEN \
-			"$QPKG_ROOT/lego" "$@" >>"$LOG" 2>&1 &
+		log "[warn] mkfifo failed: lego's output is logged unredacted"
+		out=$LOG
 	fi
+	(
+		export_creds
+		exec "$QPKG_ROOT/lego" "$@"
+	) >>"$out" 2>&1 &
 	lego_pid=$!
 	(sleep "$LEGO_TIMEOUT" && kill "$lego_pid" 2>/dev/null && log "[error] lego exceeded ${LEGO_TIMEOUT}s; killed") &
 	watchdog=$!
 	wait "$lego_pid"
 	rc=$?
 	kill "$watchdog" 2>/dev/null
+	[ -z "$redact_pid" ] || wait "$redact_pid"
+	rm -f "$fifo"
 	return "$rc"
 }
 
-# --- staging: prove DNS-01 + Cloudflare work, install nothing ----------------
+# --- staging: prove DNS-01 + the DNS provider work, install nothing ----------------
 if [ "$MODE" = staging ]; then
 	# Always a full issuance: a test that lego skips ("not due yet") proves nothing.
 	# Safe on staging: separate rate limits, and nothing is installed.
@@ -167,7 +197,7 @@ if [ "$MODE" = staging ]; then
 	log_mark=$(wc -l <"$LOG" 2>/dev/null || echo 0)
 	if run_lego "$QPKG_ROOT/data-staging" "$STAGING_SERVER"; then
 		if tail -n +"$((log_mark + 1))" "$LOG" | grep -q 'Authorization is already valid'; then
-			notify info "Test run OK, partly: Let's Encrypt reused a recent check, so the Cloudflare DNS step was skipped this time. Run the test again for a full check."
+			notify info "Test run OK, partly: Let's Encrypt reused a recent check, so the DNS step was skipped this time. Run the test again for a full check."
 		else
 			notify info "Test run OK: Let's Encrypt's test service issued a certificate for $DOMAIN (nothing installed)"
 		fi

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Check the REAL lego binary still has everything renew.sh relies on: the flags it
-# passes and the Cloudflare provider's variable names. tests/harness.sh uses a fake
+# passes, and every listed DNS provider with its variable names. tests/harness.sh uses a fake
 # lego, so without this a lego update that renamed a flag would pass CI.
 #
 #   make lego-flags   (runs this in Alpine, against the fetched binary)
@@ -27,23 +27,25 @@ for flag in --accept-tos --email --domains --server --path --dns --dns.resolvers
 		failed=1
 	fi
 done
-# The flag renew.sh relies on must also be accepted, not just documented.
-for code in cloudflare exec; do
-	if "$LEGO" dnshelp --code "$code" >/dev/null 2>&1; then
-		echo "  ok   DNS provider '$code' exists"
-	else
+# Every provider LegoCert offers by name, and every variable it stores for one, must
+# exist in this lego (qpkg/shared/providers.sh is the list the settings page uses).
+# shellcheck source=../qpkg/shared/providers.sh
+. /src/qpkg/shared/providers.sh
+for code in $PROVIDERS exec; do
+	if ! doc=$("$LEGO" dnshelp --code "$code" 2>&1); then
 		echo "  FAIL DNS provider '$code' missing"
 		failed=1
+		continue
 	fi
-done
-cf=$("$LEGO" dnshelp --code cloudflare 2>&1)
-for var in CLOUDFLARE_DNS_API_TOKEN CLOUDFLARE_ZONE_API_TOKEN; do
-	if printf '%s\n' "$cf" | grep -q "$var"; then
-		echo "  ok   cloudflare reads $var"
-	else
-		echo "  FAIL cloudflare no longer documents $var (legocert.conf passes the token in it)"
-		failed=1
-	fi
+	echo "  ok   DNS provider '$code' exists"
+	for var in $(provider_fields "$code" | cut -d'|' -f1) $(provider_extra_vars "$code"); do
+		if printf '%s\n' "$doc" | grep -q "\"$var\""; then
+			echo "  ok   $code reads $var"
+		else
+			echo "  FAIL $code no longer documents $var (legocert.conf passes it under that name)"
+			failed=1
+		fi
+	done
 done
 [ "$failed" = 0 ] && echo "real lego: all flags and variables present" || echo "real lego: MISMATCH"
 exit "$failed"

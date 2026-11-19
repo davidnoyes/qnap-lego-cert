@@ -70,8 +70,16 @@ chmod 755 /sbin/getcfg /sbin/log_tool /etc/init.d/*.sh
 # lego stub: record how it was called; on success "issue" /fixtures/next.{crt,key}.
 cat >"$ROOT/lego" <<'EOF'
 #!/bin/sh
+# `lego dnshelp --code fakedns` documents two variables; other codes are unknown.
+if [ "$1" = dnshelp ]; then
+	[ "$3" = fakedns ] || { echo "unknown provider"; exit 1; }
+	printf '  - "FAKEDNS_TOKEN":  token\n  - "FAKEDNS_SECRET":  secret\n'
+	exit 0
+fi
 echo "argv: $*" >>/tmp/lego_calls
 echo "token_in_env: ${CLOUDFLARE_DNS_API_TOKEN:+yes}" >>/tmp/lego_calls
+[ -n "${PORKBUN_SECRET_API_KEY:-}" ] && echo "ERROR porkbun: GET https://api.example/?secret=$PORKBUN_SECRET_API_KEY failed"
+echo "cred_env: $(env | grep -E '^(PORKBUN|AWS|OVH|FAKEDNS|DESEC)_' | sort | tr '\n' ' ')" >>/tmp/lego_calls
 rc=$(cat /fixtures/lego_rc 2>/dev/null || echo 0)
 [ "$rc" = 0 ] || exit "$rc"
 path=""; dom=""
@@ -407,10 +415,14 @@ check "session checked on loopback, not the request's Host" \
 	sh -c 'grep -q "127.0.0.1:.*authLogin.cgi?sid=abc123sid" /tmp/curl_stdin && ! grep -q evil.example /tmp/curl_stdin'
 check "session id not on curl's command line" sh -c '! grep -q abc123sid /tmp/curl_calls'
 check "token never sent to the browser" sh -c "! printf '%s' \"\$1\" | grep -q tok_ABC" _ "$r"
-r2=$(cgi_get "$ADMIN" "tab=settings")
+r2=$(cgi_get "$ADMIN" "tab=provider")
 check "shows only the token's last 4 characters" has "$r2" 'ends -123'
-check "token not sent on the settings tab either" sh -c "! printf '%s' \"\$1\" | grep -q tok_ABC" _ "$r2"
+check "token not sent on the provider tab either" sh -c "! printf '%s' \"\$1\" | grep -q tok_ABC" _ "$r2"
+r2=$(cgi_get "$ADMIN" "tab=settings")
+check "Settings names the DNS provider" has "$r2" 'Cloudflare. <a href="/cgi-bin/qpkg/LegoCert/index.cgi?tab=provider">Change</a>'
+check "...and has no token field any more" sh -c "! printf '%s' \"\$1\" | grep -q 'type=\"password\"'" _ "$r2"
 r2=$(cgi_get "$ADMIN" "tab=token")
+check "old 'Cloudflare token' link opens the DNS provider page" has "$r2" '<div class="title">DNS provider</div>'
 check "has the Cloudflare guide" has "$r2" '<span>DNS</span><span class="cb">Read</span><span class="cb on">Edit</span>'
 check "IP filter marked optional" has "$r2" 'Optional, recommended'
 check "zone hint comes from the NAS name" has "$r2" 'Specific zone → example.com'
@@ -441,8 +453,9 @@ check "email updated" grep -q '^EMAIL=new@example.com$' "$ROOT/legocert.conf"
 check "blank token field keeps the token" grep -q '^CLOUDFLARE_DNS_API_TOKEN=tok_ABC-123$' "$ROOT/legocert.conf"
 check "config still root 600" [ "$(stat -c '%a %u' "$ROOT/legocert.conf")" = "600 0" ]
 
-r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save&domain=$DOMAIN&email=a%40b.co&token=cfut_new%0AEVIL%3D1")
+r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&provider=cloudflare&f_CLOUDFLARE_DNS_API_TOKEN=cfut_new%0AEVIL%3D1")
 check "token with injected line rejected" sh -c "! grep -q EVIL $ROOT/legocert.conf"
+r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&provider=cloudflare&f_CLOUDFLARE_DNS_API_TOKEN=cfut_new%22%3Cx")
 check "...with a readable error" has "$r" 'unexpected characters'
 r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save&domain=%3Cscript%3Ealert(1)%3C%2Fscript%3E&email=a%40b.co&token=")
 check "bad NAS name rejected" sh -c "! grep -q script $ROOT/legocert.conf"
@@ -455,8 +468,10 @@ check "...IP gets a clear message" sh -c "printf '%s' \"\$1\" | grep -q 'not its
 r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save&domain=$DOMAIN&email=a%40b.co%0ADOMAIN%3Devil&token=")
 check "email with injected line rejected" sh -c "! grep -q evil $ROOT/legocert.conf"
 
-r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save&domain=$DOMAIN&email=a%40b.co&token=cfut_fresh_Token-9")
+r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&provider=cloudflare&f_CLOUDFLARE_DNS_API_TOKEN=cfut_fresh_Token-9")
 check "new token saved" grep -q '^CLOUDFLARE_DNS_API_TOKEN=cfut_fresh_Token-9$' "$ROOT/legocert.conf"
+check "...with the provider written out" grep -q '^DNS_PROVIDER=cloudflare$' "$ROOT/legocert.conf"
+check "...and NAS name and email kept" sh -c "grep -q '^DOMAIN=$DOMAIN\$' $ROOT/legocert.conf && grep -q '^EMAIL=new@example.com\$' $ROOT/legocert.conf"
 
 echo '{"result":{"id":"t1","status":"active"},"success":true}' >"$FIX/cf_verify.json"
 printf '{"result":[%s],"success":true}' "$(zone 1 example.com)" >"$FIX/cf_zones.json"
@@ -543,6 +558,93 @@ r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=bogus")
 check "unknown action -> 400" [ "$(status_of "$r")" = 400 ]
 r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save" 999999)
 check "oversized request -> 413" [ "$(status_of "$r")" = 413 ]
+
+section "15. other DNS providers"
+reset_box old; issue new
+pp() { cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&$1"; }   # save on the DNS provider page
+r=$(cgi_get "$ADMIN" "tab=provider&p=porkbun")
+check "provider list offers every named provider and Other" sh -c 'for c in cloudflare duckdns porkbun route53 digitalocean hetzner ovh gandiv5 desec other; do printf "%s" "$1" | grep -q "<option value=\"$c\"" || exit 1; done' _ "$r"
+check "?p= shows that provider's steps and fields" sh -c 'printf "%s" "$1" | grep -q "Create access in Porkbun" && printf "%s" "$1" | grep -q "name=\"f_PORKBUN_SECRET_API_KEY\""' _ "$r"
+check "...warns that switching drops the old credentials" has "$r" 'switches from Cloudflare to Porkbun'
+check "...says only Cloudflare is tried on a NAS" has "$r" 'Only Cloudflare has been tried'
+r=$(pp "provider=porkbun&f_PORKBUN_API_KEY=pk1_abc&f_PORKBUN_SECRET_API_KEY=")
+check "missing secret key rejected, named" has "$r" 'Enter the Porkbun secret key.'
+check "...field marked" has "$r" 'class="bad" type="password" id="f_PORKBUN_SECRET_API_KEY"'
+check "...nothing saved" grep -q '^CLOUDFLARE_DNS_API_TOKEN=tok_ABC-123$' "$ROOT/legocert.conf"
+check "...page shows what is saved (Cloudflare), not the rejected input" sh -c "! printf '%s' \"\$1\" | grep -q 'pk1_abc'" _ "$r"
+r=$(pp "provider=porkbun&f_PORKBUN_API_KEY=pk1_abc&f_PORKBUN_SECRET_API_KEY=sk1_secret%20")
+check "switch to Porkbun saved" sh -c "grep -q '^DNS_PROVIDER=porkbun\$' $ROOT/legocert.conf && grep -q '^PORKBUN_API_KEY=pk1_abc\$' $ROOT/legocert.conf && grep -q '^PORKBUN_SECRET_API_KEY=sk1_secret\$' $ROOT/legocert.conf"
+check "...Cloudflare token removed" sh -c "! grep -q CLOUDFLARE $ROOT/legocert.conf"
+check "...NAS name and email kept" sh -c "grep -q '^DOMAIN=$DOMAIN\$' $ROOT/legocert.conf && grep -q '^EMAIL=test@example.com\$' $ROOT/legocert.conf"
+check "...still root 600" [ "$(stat -c '%a %u' "$ROOT/legocert.conf")" = "600 0" ]
+r=$(cgi_get "$ADMIN" "tab=provider")
+check "page shows Porkbun, secrets only as last 4" sh -c "printf '%s' \"\$1\" | grep -q 'ends cret' && ! printf '%s' \"\$1\" | grep -q 'sk1_secret' && ! printf '%s' \"\$1\" | grep -q 'pk1_abc'" _ "$r"
+check "no Check token for Porkbun" sh -c "! printf '%s' \"\$1\" | grep -q 'Check token'" _ "$r"
+pp "provider=porkbun&f_PORKBUN_API_KEY=&f_PORKBUN_SECRET_API_KEY=" >/dev/null
+check "empty secret fields keep the saved keys" grep -q '^PORKBUN_SECRET_API_KEY=sk1_secret$' "$ROOT/legocert.conf"
+: >/tmp/lego_calls; : >"$ROOT/log/legocert.log"
+"$ROOT/renew.sh"; rc=$?
+check "Renew now with Porkbun: exit 0" [ "$rc" = 0 ]
+check "...lego asked for --dns porkbun" grep -q -- '--dns porkbun' /tmp/lego_calls
+check "...both keys reached lego via env" grep -q 'cred_env: PORKBUN_API_KEY=pk1_abc PORKBUN_SECRET_API_KEY=sk1_secret' /tmp/lego_calls
+check "...not on lego's command line or in the log" sh -c "! grep '^argv' /tmp/lego_calls | grep -q sk1_ && ! grep -rq sk1_ $ROOT/log"
+check "...a credential lego prints is redacted in the log" grep -q 'secret=\[redacted\] failed' "$ROOT/log/legocert.log"
+check "...the redactor's temporary pipe is gone" sh -c 'ls -a "$1" | grep -q "^.lego-out" && exit 1 || exit 0' _ "$ROOT"
+out=$("$ROOT/renew.sh" --check-token); rc=$?
+check "Check token refuses politely for Porkbun" sh -c '[ "$1" = 2 ] && printf "%s" "$2" | grep -q "use Test run"' _ "$rc" "$out"
+: >"$ROOT/log/legocert.log"
+printf '2026-11-19 10:00:00 Test run started\nINFO  dns01: preparing to solve the challenge.\nERROR porkbun: status code 403: Invalid API key.\n2026-11-19 10:00:05 [error] Test run FAILED for x\n' >>"$ROOT/log/legocert.log"
+check "rejected credentials named for the provider" sh -c 'printf "%s" "$1" | grep -q "Porkbun rejected the credentials"' _ "$(stv "$(st)" msg)"
+check "progress names the provider" sh -c ': >"$1"; printf "2026-11-19 10:01:00 Test run started\nINFO  dns01: preparing to solve the challenge.\n" >>"$1"; true' _ "$ROOT/log/legocert.log"
+sleep 30 & live=$!; mkdir -p "$ROOT/.lock"; echo "$live" >"$ROOT/.lock/pid"
+check "...DNS record in Porkbun" sh -c 'printf "%s" "$1" | grep -q "DNS record in Porkbun"' _ "$(stv "$(st)" msg)"
+kill "$live"; rm -rf "$ROOT/.lock"
+
+r=$(pp "provider=route53&f_AWS_ACCESS_KEY_ID=AKIAEXAMPLE&f_AWS_SECRET_ACCESS_KEY=wJal%2Fr%2BXUt&f_AWS_HOSTED_ZONE_ID=")
+check "Route 53 saved without the optional zone ID" sh -c "grep -q '^DNS_PROVIDER=route53\$' $ROOT/legocert.conf && grep -q '^AWS_SECRET_ACCESS_KEY=wJal/r+XUt\$' $ROOT/legocert.conf && ! grep -q AWS_HOSTED $ROOT/legocert.conf"
+: >/tmp/lego_calls; "$ROOT/renew.sh" --staging >/dev/null
+check "...lego gets the keys and a region" grep -q 'cred_env: AWS_ACCESS_KEY_ID=AKIAEXAMPLE AWS_REGION=us-east-1 AWS_SECRET_ACCESS_KEY=wJal/r+XUt' /tmp/lego_calls
+r=$(cgi_get "$ADMIN" "tab=provider")
+check "...access key ID shown, secret not" sh -c "printf '%s' \"\$1\" | grep -q 'value=\"AKIAEXAMPLE\"' && ! printf '%s' \"\$1\" | grep -q 'wJal'" _ "$r"
+r=$(pp "provider=ovh&f_OVH_ENDPOINT=evil&f_OVH_APPLICATION_KEY=a&f_OVH_APPLICATION_SECRET=b&f_OVH_CONSUMER_KEY=c")
+check "OVH: unknown region rejected" has "$r" 'Choose the OVHcloud region.'
+pp "provider=ovh&f_OVH_ENDPOINT=ovh-ca&f_OVH_APPLICATION_KEY=a&f_OVH_APPLICATION_SECRET=b&f_OVH_CONSUMER_KEY=c" >/dev/null
+r=$(cgi_get "$ADMIN" "tab=provider")
+check "OVH saved, region preselected" has "$r" '<option value="ovh-ca" selected>Canada</option>'
+r=$(pp "provider=desec&f_DESEC_TOKEN=abc%22def")
+check "a quote in a secret is rejected" has "$r" 'The token has unexpected characters'
+r=$(pp "provider=nosuch&f_X=1")
+check "unknown provider -> 400" [ "$(status_of "$r")" = 400 ]
+
+r=$(pp "provider=other&other_code=fakedns&other_env=FAKEDNS_TOKEN%3Dt0k%0D%0AFAKEDNS_SECRET%3Ds3c%0D%0A")
+check "Other: code + variables saved" sh -c "grep -q '^DNS_PROVIDER=fakedns\$' $ROOT/legocert.conf && grep -q '^FAKEDNS_TOKEN=t0k\$' $ROOT/legocert.conf && grep -q '^FAKEDNS_SECRET=s3c\$' $ROOT/legocert.conf"
+r=$(cgi_get "$ADMIN" "tab=provider")
+check "...page lists the names, not the values" sh -c "printf '%s' \"\$1\" | grep -q 'Saved: FAKEDNS_TOKEN, FAKEDNS_SECRET' && ! printf '%s' \"\$1\" | grep -q 's3c'" _ "$r"
+: >/tmp/lego_calls; "$ROOT/renew.sh" --staging >/dev/null
+check "...reach lego via env, with its code" sh -c "grep -q -- '--dns fakedns' /tmp/lego_calls && grep -q 'cred_env: FAKEDNS_SECRET=s3c FAKEDNS_TOKEN=t0k' /tmp/lego_calls"
+r=$(pp "provider=other&other_code=fakedns&other_env=FAKEDNS_TYPO%3D1")
+check "Other: a variable lego doesn't document is rejected" has "$r" "fakedns doesn&#39;t use FAKEDNS_TYPO"
+r=$(pp "provider=other&other_code=fakedns&other_env=PATH%3D%2Ftmp")
+check "Other: PATH can't be set" has "$r" "PATH can&#39;t be set here."
+r=$(pp "provider=other&other_code=fakedns&other_env=LD_PRELOAD%3D%2Ftmp%2Fx.so")
+check "Other: LD_PRELOAD can't be set" sh -c "printf '%s' \"\$1\" | grep -q 'can&#39;t be set here' && ! grep -q LD_PRELOAD $ROOT/legocert.conf" _ "$r"
+r=$(pp "provider=other&other_code=nosuchdns&other_env=X_Y%3D1")
+check "Other: unknown code rejected" has "$r" 'lego has no DNS provider with the code nosuchdns.'
+r=$(pp "provider=other&other_code=porkbun&other_env=PORKBUN_API_KEY%3D1")
+check "Other: a listed provider points to the list" has "$r" 'Porkbun is in the list: choose it there.'
+r=$(pp "provider=other&other_code=fake%3Bdns&other_env=")
+check "Other: bad code rejected" has "$r" 'Enter a lego provider code'
+check "...settings unchanged by all the rejects" sh -c "grep -q '^DNS_PROVIDER=fakedns\$' $ROOT/legocert.conf && grep -q '^FAKEDNS_TOKEN=t0k\$' $ROOT/legocert.conf"
+printf 'DOMAIN=%s\nEMAIL=a@b.co\nDNS_PROVIDER=fakedns\nLD_PRELOAD=/tmp/x.so\n' "$DOMAIN" >"$ROOT/legocert.conf"; chmod 600 "$ROOT/legocert.conf"
+: >/tmp/lego_calls; "$ROOT/renew.sh" >/dev/null 2>&1; rc=$?
+check "hand-edited LD_PRELOAD in legocert.conf refused, lego not run" sh -c '[ "$1" != 0 ] && [ ! -s /tmp/lego_calls ]' _ "$rc"
+printf 'DOMAIN=%s\nEMAIL=a@b.co\nDNS_PROVIDER=hetzner\n' "$DOMAIN" >"$ROOT/legocert.conf"; chmod 600 "$ROOT/legocert.conf"
+r=$(cgi_get "$ADMIN")
+check "provider chosen but no credentials: opens DNS provider, says not set up" sh -c "printf '%s' \"\$1\" | grep -q '<div class=\"title\">DNS provider</div>'" _ "$r"
+r=$(cgi_get "$ADMIN" "tab=overview")
+check "...Overview says so too" has "$r" 'Not set up yet. Start with'
+"$ROOT/renew.sh" >/dev/null 2>&1
+check "...and a run explains what's missing" grep -q 'Settings: Enter the Hetzner API token.' "$ROOT/log/legocert.log"
 
 echo
 echo "passed: $pass  failed: $failed"

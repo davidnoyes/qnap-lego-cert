@@ -50,8 +50,8 @@ cp assets/icon_80.png assets/icon_100.png "$out"/
     <type>Security</type>
     <icon80>${pages}/icon_80.png</icon80>
     <icon100>${pages}/icon_100.png</icon100>
-    <description><![CDATA[Keeps the QTS web certificate valid with Let's Encrypt, using Cloudflare DNS validation, so it works for internal names that QTS's built-in Let's Encrypt can't do. Renews automatically, installs the certificate into QTS, and reports problems to Notification Center.]]></description>
-    <moreDescription><![CDATA[Open LegoCert from App Center to set it up: create a Cloudflare API token (the app shows how), enter the NAS name, your email and the token, then Test run and Renew now. Source, changelog and documentation: https://github.com/${repo}]]></moreDescription>
+    <description><![CDATA[Keeps the QTS web certificate valid with Let's Encrypt, using DNS validation (Cloudflare, Route 53, Porkbun, DuckDNS and more), so it works for internal names that QTS's built-in Let's Encrypt can't do. Renews automatically, installs the certificate into QTS, and reports problems to Notification Center.]]></description>
+    <moreDescription><![CDATA[Open LegoCert from App Center to set it up: choose your DNS provider and create access there (the app shows how), enter the NAS name and your email, then Test run and Renew now. Source, changelog and documentation: https://github.com/${repo}]]></moreDescription>
     <fwVersion>${fwver}</fwVersion>
     <version>${version}</version>
 EOF

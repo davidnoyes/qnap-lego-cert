@@ -21,7 +21,7 @@ marked *untested*.
 ## Secrets
 
 **What's sensitive on the NAS**
-- the Cloudflare token (`legocert.conf`)
+- the DNS provider credentials (`legocert.conf`)
 - the ACME account key and certificate keys (`data/`)
 - private keys in `/etc/stunnel` and its backups
 
@@ -34,7 +34,7 @@ NAS's shares, can't read or modify it.
 - The token is passed to lego through its environment for that one process. It is never
   exported, never on a command line (`ps` shows command lines to every user; tested), and
   never logged (tested). `/proc/<pid>/environ` is root-only.
-- `install-cert.sh` never sees the token.
+- `install-cert.sh` never sees the token (or any provider's credentials).
 
 **The real risk is the token's scope, not where it's stored.** User-facing steps for all of
 the following are in [cloudflare-token.md](cloudflare-token.md), and `renew.sh --check-token`
@@ -60,6 +60,21 @@ needs a second domain. It stays documented as optional in cloudflare-token.md.
 
 **Residual risk accepted with this choice:** a leaked token could edit any record in the main
 zone; with the IP filter, only from the home IP.
+
+**Other DNS providers (0.6).** The same rule applies: the credential's scope is the risk.
+How narrow it can be depends on the provider, and the setup steps on the page ask for the
+narrowest each offers: Route 53 an IAM user whose policy covers one hosted zone, DigitalOcean
+the `domain` scope only, Gandi a token restricted to one domain with technical-configuration
+rights only, OVHcloud `/domain/zone/*` rights only. Some can't be narrowed: a Hetzner token
+covers its whole project (the page recommends a project just for the DNS zone), and a DuckDNS
+token controls every name on that account. Credentials are stored and handled like the
+Cloudflare token: under lego's variable names in `legocert.conf` (root 600), write-only in the
+page, exported only into lego's own environment. Lego's output reaches the log through a
+redactor that replaces every stored credential with `[redacted]`, because some providers'
+errors quote it (DuckDNS puts the token in the URL it prints; the e2e test caught this).
+The advanced *Other* path accepts a variable only if `lego dnshelp --code` documents it for
+that provider, and never names that change how lego or the shell runs (`PATH`, `LD_*`,
+`LEGO_*`, `*_PROXY`, …), in the page or in a hand-edited `legocert.conf`.
 
 **Accepted residual risks**
 - **Everything runs as root.** That includes lego, a network client parsing responses
@@ -102,8 +117,8 @@ remains the fallback.
 `tests/harness.sh` fakes lego, so it can't notice lego itself changing. Two more checks run
 the real binary in CI (and gate Dependabot's lego updates):
 
-- `make lego-flags`: every flag `renew.sh` passes, the `cloudflare` and `exec` providers, and
-  the Cloudflare variable names.
+- `make lego-flags`: every flag `renew.sh` passes, and every DNS provider in
+  `qpkg/shared/providers.sh` (plus `exec`) with each variable LegoCert stores for it.
 - `make e2e`: LegoCert end to end against Pebble with lego's `exec` DNS provider (two test-only
   variables in `renew.sh`, `LEGOCERT_TEST_DNS_PROVIDER` and `LEGOCERT_TEST_STAGING_SERVER`,
   never set in normal use). It found, before any user did: Pebble's 6-day profile tripping

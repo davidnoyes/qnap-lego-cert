@@ -43,18 +43,54 @@ notify() {
 }
 
 # --- configuration --------------------------------------------------------------
-# legocert.conf is read as data, never as code: KEY=VALUE lines with known keys only.
-# It must be root-owned and mode 600 (it holds the token). The settings page and the
-# scripts share read_conf / validate_conf / write_conf, so both apply the same rules.
+# legocert.conf is read as data, never as code: KEY=VALUE lines. LegoCert's own keys
+# (OWN_KEYS) plus the DNS provider's credentials, stored under lego's own variable
+# names (providers.sh). It must be root-owned and mode 600 (it holds credentials).
+# The settings page and the scripts share read_conf / validate_conf / write_conf, so
+# both apply the same rules.
+
+. "$QPKG_ROOT/providers.sh"
+
+OWN_KEYS="DOMAIN EMAIL DNS_PROVIDER ACME_SERVER DNS_RESOLVERS HTTPS_PORT"
 
 conf_perms_ok() {
 	[ "$(ls -ln "$CONF" | awk '{print $1, $3}')" = "-rw------- 0" ]
 }
 
-# read_conf: parse into DOMAIN EMAIL CF_DNS_TOKEN CF_ZONE_TOKEN ACME_SERVER
-# DNS_RESOLVERS HTTPS_PORT (raw values, no defaults). On failure sets ERR.
+# Never accepted as a credential: they would change how lego or the shell runs.
+reserved_var() { # reserved_var NAME
+	case $1 in
+	PATH | HOME | IFS | ENV | BASH_ENV | SHELL | USER | PWD | TMPDIR | TZ | ZONEINFO | GODEBUG | GOFLAGS | GOMAXPROCS | \
+		LD_* | LEGO_* | LEGOCERT_* | SSL_* | *_PROXY | QPKG_* | CREDS | ERR | ERR_FIELD) return 0 ;;
+	esac
+	case " $OWN_KEYS " in *" $1 "*) return 0 ;; esac
+	return 1
+}
+
+# CREDS holds the provider's credentials as "NAME=value" lines (no empty values).
+cred_get() { # cred_get NAME
+	printf '%s\n' "$CREDS" | sed -n "s/^$1=//p" | head -n 1
+}
+cred_set() { # cred_set NAME VALUE   (empty VALUE removes it)
+	CREDS=$(printf '%s\n' "$CREDS" | grep -v "^$1=" | grep .)
+	[ -z "$2" ] || CREDS=$(printf '%s\n%s=%s\n' "$CREDS" "$1" "$2" | grep .)
+	true
+}
+cred_names() { printf '%s\n' "$CREDS" | sed -n 's/=.*//p' | tr '\n' ' ' | sed 's/ $//'; }
+
+# Does a named provider use this variable? (Other providers: checked against lego when saved.)
+provider_uses() { # provider_uses CODE NAME
+	{ provider_fields "$1" | cut -d'|' -f1; provider_extra_vars "$1"; } | grep -qx "$2"
+}
+# A field's label for messages: "Secret key" -> "secret key", "API key" stays.
+field_phrase() { # field_phrase LABEL
+	printf '%s' "$1" | awk '{ if (substr($0, 2, 1) ~ /[a-z ]/) $0 = tolower(substr($0, 1, 1)) substr($0, 2); print }'
+}
+
+# read_conf: parse into DOMAIN EMAIL DNS_PROVIDER CREDS ACME_SERVER DNS_RESOLVERS
+# HTTPS_PORT (raw values, no defaults). On failure sets ERR.
 read_conf() {
-	DOMAIN="" EMAIL="" CF_DNS_TOKEN="" CF_ZONE_TOKEN="" ACME_SERVER="" DNS_RESOLVERS="" HTTPS_PORT=""
+	DOMAIN="" EMAIL="" DNS_PROVIDER="" CREDS="" ACME_SERVER="" DNS_RESOLVERS="" HTTPS_PORT=""
 	ERR=""
 	if [ ! -f "$CONF" ]; then
 		ERR="$CONF is missing"
@@ -75,51 +111,111 @@ read_conf() {
 		case $key in
 		DOMAIN) DOMAIN=$val ;;
 		EMAIL) EMAIL=$val ;;
-		CLOUDFLARE_DNS_API_TOKEN) CF_DNS_TOKEN=$val ;;
-		CLOUDFLARE_ZONE_API_TOKEN) CF_ZONE_TOKEN=$val ;;
+		DNS_PROVIDER) DNS_PROVIDER=$val ;;
 		ACME_SERVER) ACME_SERVER=$val ;;
 		DNS_RESOLVERS) DNS_RESOLVERS=$val ;;
 		HTTPS_PORT) HTTPS_PORT=$val ;;
 		*)
-			ERR="legocert.conf has an unknown setting: $key"
-			return 1
+			case $key in '' | [!A-Z]* | *[!A-Z0-9_]*)
+				ERR="legocert.conf has an unknown setting: $(printf '%s' "$key" | cut -c1-30)"
+				return 1
+				;;
+			esac
+			if reserved_var "$key"; then
+				ERR="legocert.conf can't set $key"
+				return 1
+			fi
+			[ -z "$val" ] || CREDS=$(printf '%s\n%s=%s\n' "$CREDS" "$key" "$val" | grep .)
 			;;
 		esac
 	done <"$CONF"
+	# Before 0.6 Cloudflare was the only provider (no DNS_PROVIDER line).
+	DNS_PROVIDER=${DNS_PROVIDER:-cloudflare}
 }
 
-# validate_conf: check the current values. On failure sets ERR (safe to show:
-# never contains a token).
+# validate_conf [all|settings|provider]: check the current values. Formats are always
+# checked; "settings" requires the NAS name and email, "provider" the credentials,
+# "all" (runs) both. On failure sets ERR (short, safe to show: never contains a
+# credential) and ERR_FIELD (domain|email|cred:NAME|other_code|other_env).
 # shellcheck disable=SC2034  # ERR_FIELD is read by ui/index.cgi
-validate_conf() { # sets ERR (short, safe to show) and ERR_FIELD (domain|email|token)
+validate_conf() {
+	scope=${1:-all}
 	ERR="" ERR_FIELD=""
-	case $DOMAIN in
-	'') ERR="Enter the NAS name." ERR_FIELD=domain ;;
-	.* | *. | *..* | *[!A-Za-z0-9.-]*) ERR="Enter a valid NAS name, like nas.example.com." ERR_FIELD=domain ;;
-	*.*[!0-9.]*) ;;
-	*.*) ERR="Enter the NAS's name, not its IP address. Let's Encrypt only issues certificates for names." ERR_FIELD=domain ;;
-	*) ERR="Enter the full name, like nas.example.com." ERR_FIELD=domain ;;
-	esac
-	# The last label must contain a letter (a top-level domain), e.g. not 10.0.0.1x.5
-	case ${DOMAIN##*.} in *[A-Za-z]*) ;; *) [ -n "$ERR" ] || { ERR="Enter the NAS's name, not its IP address. Let's Encrypt only issues certificates for names." ERR_FIELD=domain; } ;; esac
+	if [ -n "$DOMAIN" ] || [ "$scope" != provider ]; then
+		case $DOMAIN in
+		'') ERR="Enter the NAS name." ERR_FIELD=domain ;;
+		.* | *. | *..* | *[!A-Za-z0-9.-]*) ERR="Enter a valid NAS name, like nas.example.com." ERR_FIELD=domain ;;
+		*.*[!0-9.]*) ;;
+		*.*) ERR="Enter the NAS's name, not its IP address. Let's Encrypt only issues certificates for names." ERR_FIELD=domain ;;
+		*) ERR="Enter the full name, like nas.example.com." ERR_FIELD=domain ;;
+		esac
+		# The last label must contain a letter (a top-level domain), e.g. not 10.0.0.1x.5
+		case ${DOMAIN##*.} in *[A-Za-z]*) ;; *) [ -n "$ERR" ] || { ERR="Enter the NAS's name, not its IP address. Let's Encrypt only issues certificates for names." ERR_FIELD=domain; } ;; esac
+		[ -z "$ERR" ] || return 1
+	fi
+	if [ -n "$EMAIL" ] || [ "$scope" != provider ]; then
+		case $EMAIL in
+		'') ERR="Enter an email address." ;;
+		*[!A-Za-z0-9.@_+-]* | *@*@* | @* | *@) ERR="Enter a valid email address." ;;
+		?*@?*.?*) ;;
+		*) ERR="Enter a valid email address." ;;
+		esac
+		[ -z "$ERR" ] || { ERR_FIELD=email; return 1; }
+	fi
+
+	plabel=$(provider_label "$DNS_PROVIDER")
+	if ! is_known_provider "$DNS_PROVIDER"; then
+		case $DNS_PROVIDER in '' | [!a-z0-9]* | *[!a-z0-9._-]*)
+			ERR="Enter a lego provider code, like cloudflare." ERR_FIELD=other_code
+			return 1
+			;;
+		esac
+	fi
+	old_ifs=$IFS
+	IFS='
+'
+	for kv in $CREDS; do
+		name=${kv%%=*} v=${kv#*=}
+		if is_known_provider "$DNS_PROVIDER" && ! provider_uses "$DNS_PROVIDER" "$name"; then
+			ERR="legocert.conf has a setting $plabel doesn't use: $name"
+			break
+		fi
+		label=$(provider_fields "$DNS_PROVIDER" | grep "^$name|" | cut -d'|' -f3)
+		# Printable, no spaces, no quotes or backslashes (read_conf strips surrounding quotes).
+		case $v in *[!!-~]* | *[\"\'\`\\]*)
+			ERR="The $(field_phrase "${label:-$name}") has unexpected characters. Paste only the value." ERR_FIELD="cred:$name"
+			is_known_provider "$DNS_PROVIDER" || ERR_FIELD=other_env
+			break
+			;;
+		esac
+	done
+	if [ -z "$ERR" ] && [ "$DNS_PROVIDER" = ovh ]; then
+		case $(cred_get OVH_ENDPOINT) in '' | ovh-eu | ovh-ca | ovh-us) ;; *) ERR="Choose the OVHcloud region." ERR_FIELD=cred:OVH_ENDPOINT ;; esac
+	fi
+	if [ -z "$ERR" ] && [ "$scope" != settings ]; then
+		if is_known_provider "$DNS_PROVIDER"; then
+			for f in $(provider_fields "$DNS_PROVIDER"); do
+				name=${f%%|*} kind=$(printf '%s' "$f" | cut -d'|' -f2) label=${f##*|}
+				[ "$kind" = optional ] && continue
+				if [ -z "$(cred_get "$name")" ]; then
+					ERR="Enter the $plabel $(field_phrase "$label")." ERR_FIELD="cred:$name"
+					break
+				fi
+			done
+		elif [ -z "$CREDS" ]; then
+			ERR="Enter the variables $DNS_PROVIDER needs." ERR_FIELD=other_env
+		fi
+	fi
+	IFS=$old_ifs
 	[ -z "$ERR" ] || return 1
-	case $EMAIL in
-	'') ERR="Enter an email address." ;;
-	*[!A-Za-z0-9.@_+-]* | *@*@* | @* | *@) ERR="Enter a valid email address." ;;
-	?*@?*.?*) ;;
-	*) ERR="Enter a valid email address." ;;
-	esac
-	[ -z "$ERR" ] || { ERR_FIELD=email; return 1; }
-	case $CF_DNS_TOKEN in
-	'') ERR="Enter the Cloudflare API token." ERR_FIELD=token ;;
-	*[!A-Za-z0-9_-]*) ERR="The token has unexpected characters. Paste only the token." ERR_FIELD=token ;;
-	esac
-	case $CF_ZONE_TOKEN in *[!A-Za-z0-9_-]*) ERR="The zone token has unexpected characters" ;; esac
 	case $ACME_SERVER in *[!A-Za-z0-9:/._-]*) ERR="ACME_SERVER contains unexpected characters" ;; esac
 	case $DNS_RESOLVERS in *[!0-9A-Fa-f.:,\[\]]*) ERR="DNS_RESOLVERS contains unexpected characters" ;; esac
 	case $HTTPS_PORT in *[!0-9]*) ERR="HTTPS_PORT is not a number" ;; esac
 	[ -z "$ERR" ]
 }
+
+# Are the DNS provider's credentials all there? (No output; ERR untouched.)
+provider_ready() { (validate_conf provider) >/dev/null 2>&1; }
 
 # write_conf: write the current (validated) values, atomically, root:root 0600.
 write_conf() {
@@ -128,11 +224,11 @@ write_conf() {
 		umask 077
 		{
 			echo "# LegoCert configuration. Written by the LegoCert settings page; KEY=VALUE data,"
-			echo "# never executed. Must be root:root 0600. Token guide: the settings page."
+			echo "# never executed. Must be root:root 0600. Credentials use lego's variable names."
 			echo "DOMAIN=$DOMAIN"
 			echo "EMAIL=$EMAIL"
-			echo "CLOUDFLARE_DNS_API_TOKEN=$CF_DNS_TOKEN"
-			[ -n "$CF_ZONE_TOKEN" ] && echo "CLOUDFLARE_ZONE_API_TOKEN=$CF_ZONE_TOKEN"
+			echo "DNS_PROVIDER=$DNS_PROVIDER"
+			[ -n "$CREDS" ] && printf '%s\n' "$CREDS"
 			[ -n "$ACME_SERVER" ] && echo "ACME_SERVER=$ACME_SERVER"
 			[ -n "$DNS_RESOLVERS" ] && echo "DNS_RESOLVERS=$DNS_RESOLVERS"
 			[ -n "$HTTPS_PORT" ] && echo "HTTPS_PORT=$HTTPS_PORT"
@@ -142,6 +238,20 @@ write_conf() {
 	rc=$?
 	rm -f "$tmp"
 	return "$rc"
+}
+
+# export_creds: put the credentials into the environment. Call only in the subshell
+# that runs lego: they must never reach a command line or another process.
+export_creds() {
+	old_ifs=$IFS
+	IFS='
+'
+	set -f
+	for kv in $CREDS; do export "${kv?}"; done
+	set +f
+	IFS=$old_ifs
+	# Route 53 is global, but the AWS client still wants a region.
+	if [ "$DNS_PROVIDER" = route53 ]; then export AWS_REGION="${AWS_REGION:-us-east-1}"; fi
 }
 
 # load_conf: for the scripts. Read, check permissions, validate, apply defaults.
@@ -154,7 +264,7 @@ load_conf() {
 		log "[error] $CONF must be owned by root with mode 600 (is: $(ls -ln "$CONF" | awk '{print $1, $3}'))"
 		return 1
 	fi
-	if ! read_conf || ! validate_conf; then
+	if ! read_conf || ! validate_conf all; then
 		log "[error] Settings: $ERR"
 		return 1
 	fi

@@ -117,6 +117,57 @@ check "second test did not reuse an authorization" seg_lacks "Authorization is a
 check "progress: 'Everything works'" msg_has "Everything works"
 check "test runs installed nothing" served_is "$renewed"
 
+section "E6. Each listed DNS provider, through LegoCert and the real lego"
+# No provider accounts here. What this proves, per provider, is that the names
+# LegoCert stores are the ones this lego reads:
+#  - without credentials, lego stops at its own credential check;
+#  - with LegoCert's fields filled in, lego passes that check and starts the DNS
+#    step. Its call to the provider then fails on purpose: every connection except
+#    to Pebble and challtestsrv goes to a dead proxy, so nothing leaves the test.
+. "$ROOT/providers.sh"
+dummy() { # dummy VAR: a plausible-looking fake value
+	case $1 in OVH_ENDPOINT) echo ovh-eu ;; *) echo "legocert-e2e-fake-$1" ;; esac
+}
+provider_run() { # provider_run CODE with|without
+	{
+		printf 'DOMAIN=%s\nEMAIL=test@example.com\nDNS_PROVIDER=%s\nACME_SERVER=%s\nDNS_RESOLVERS=%s:8053\n' "$DOMAIN" "$1" "$ACME" "$CHALL"
+		if [ "$2" = with ]; then
+			for v in $(provider_fields "$1" | grep -v '|optional|' | cut -d'|' -f1); do echo "$v=$(dummy "$v")"; done
+		fi
+	} >"$ROOT/legocert.conf"
+	chmod 600 "$ROOT/legocert.conf"
+	if [ "$2" = with ]; then
+		LEGOCERT_TEST_DNS_PROVIDER='' HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=pebble,10.77.0.0/24 \
+			"$ROOT/renew.sh" --staging >/dev/null 2>&1
+	else
+		# LegoCert itself refuses to run without the credentials, so call lego directly
+		# with LegoCert's own arguments.
+		(cd /tmp && env -u LEGOCERT_TEST_DNS_PROVIDER -u EXEC_PATH "$ROOT/lego" run --accept-tos --email test@example.com \
+			--domains "$DOMAIN" --server "$ACME" --path /tmp/lego-nocreds --dns "$1" --no-random-sleep >>"$LOGF" 2>&1)
+	fi
+}
+cp "$ROOT/legocert.conf" /tmp/legocert.conf.e2e
+for code in $PROVIDERS; do
+	if [ "$code" != route53 ]; then # AWS credentials can come from many places: no fixed list
+		printf '%s Test run started\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$LOGF"
+		provider_run "$code" without
+		check "$code: without credentials, lego stops at its credential check" seg_matches 'credentials information are missing|missing authentication information'
+		case $code in ovh | gandiv5) ;; *) # these name the variables they need: ours must be among them
+			for v in $(provider_fields "$code" | grep -v '|optional|' | cut -d'|' -f1); do
+				check "$code: lego asks for $v by that name" seg_has "$v"
+			done
+			;;
+		esac
+	fi
+	provider_run "$code" with
+	check "$code: with LegoCert's fields, lego passes its credential check" seg_lacks 'credentials information are missing'
+	check "$code: ...and starts the DNS step" seg_has 'dns01: preparing to solve'
+	check "$code: ...credentials not in the log" seg_lacks 'legocert-e2e-fake-'
+	# DuckDNS puts the token in the URL lego prints on errors: proof the redactor works.
+	[ "$code" = duckdns ] && check "duckdns: the token lego printed is redacted" seg_has '[redacted]'
+done
+cp /tmp/legocert.conf.e2e "$ROOT/legocert.conf"
+
 echo
 echo "e2e passed: $pass  failed: $failed"
 if [ "$failed" != 0 ]; then

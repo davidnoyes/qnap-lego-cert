@@ -6,7 +6,7 @@
 #  - every request must carry a QTS session of an ADMINISTRATOR, checked by asking
 #    QTS's authLogin.cgi on loopback (never a URL built from the request);
 #  - state-changing requests are POST + a CSRF token bound to that session;
-#  - the Cloudflare token is write-only: never sent back to the browser;
+#  - DNS provider secrets are write-only: never sent back to the browser;
 #  - everything shown is HTML-escaped; inputs pass the same validate_conf as the scripts;
 #  - nothing from the request reaches a shell command line or eval;
 #  - no JavaScript at all (navigation is plain links), so CSP allows no scripts.
@@ -70,6 +70,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 .row{display:flex;align-items:flex-start;gap:16px;margin:0 0 14px}
 .row>label,.row>.lbl{width:200px;flex:none;padding-top:7px}
 .row .ctl{flex:1;min-width:0;max-width:460px}
+select{height:36px;padding:0 8px;border:1px solid var(--input);border-radius:2px;font:inherit;color:var(--text);background:#fff;min-width:220px}
+textarea{width:100%;min-height:96px;padding:8px 10px;border:1px solid var(--input);border-radius:2px;font:13px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--text);background:#fff}
+textarea.bad,select.bad{border-color:var(--err);background:#fff6f6}
+.pick{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 input[type=text],input[type=email],input[type=password]{width:100%;height:36px;padding:0 10px;border:1px solid var(--input);border-radius:2px;font:inherit;color:var(--text);background:#fff}
 input:focus{border-color:var(--btn);outline:none}input.bad{border-color:var(--err);background:#fff6f6}
 .hint{font-size:13px;color:var(--muted);margin:4px 0 0}
@@ -158,7 +162,7 @@ side_nav() {
 	printf '<nav class="side">'
 	nav_link overview "$ICON_HOME Overview" "$1" top
 	printf '<div class="grp">%s Setup</div>' "$ICON_SETUP"
-	nav_link token "Cloudflare token" "$1"
+	nav_link provider "DNS provider" "$1"
 	nav_link settings "Settings" "$1"
 	nav_link notify "$ICON_BELL Notifications" "$1" top
 	printf '</nav>'
@@ -269,8 +273,10 @@ button_form() { # button_form ACTION LABEL [primary]
 tab_overview() {
 	title "Overview"
 	render_progress
-	if [ -z "$DOMAIN" ] || [ -z "$CF_DNS_TOKEN" ]; then
-		note info "Not set up yet. Start with <a href=\"$SELF?tab=token\">Cloudflare token</a>."
+	if ! provider_ready; then
+		note info "Not set up yet. Start with <a href=\"$SELF?tab=provider\">DNS provider</a>."
+	elif [ -z "$DOMAIN" ] || [ -z "$EMAIL" ]; then
+		note info "Almost set up. Enter the NAS name and email in <a href=\"$SELF?tab=settings\">Settings</a>."
 	fi
 	printf '<div class="panel"><h3>Status</h3><div class="body"><table class="kv">'
 	if [ -n "$DOMAIN" ]; then
@@ -348,35 +354,165 @@ guess_zone() {
 	NF >= 2 { print $(NF-1) "." $NF }'
 }
 
-tab_token() {
-	title "Cloudflare token"
+# Setup steps per provider: short, matching each provider's own wording.
+provider_steps() { # provider_steps CODE
 	zone=$(guess_zone "$DOMAIN")
-	printf '<p class="desc">LegoCert uses a Cloudflare API token to prove you own the NAS name. Create one as follows.</p>'
-	printf '<div class="panel"><div class="body"><ol class="steps">'
-	printf '<li>In Cloudflare, open <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">My Profile → API Tokens</a> and click <b>Create Token</b>.</li>'
-	printf '<li><b>Token name:</b> for example <code>LegoCert NAS</code>.</li>'
-	if [ -n "$zone" ]; then
-		printf '<li>Under <b>Policies</b>, set <b>Include → Specific zone → %s</b> (the domain your NAS name is in).</li>' "$(esc "$zone")"
-	else
-		printf '<li>Under <b>Policies</b>, set <b>Include → Specific zone →</b> the domain your NAS name is in.</li>'
-	fi
-	printf '<li>Open <b>DNS &amp; Zones</b> and tick only these two:'
-	printf '<div class="cf"><div class="cfrow"><span>DNS</span><span class="cb">Read</span><span class="cb on">Edit</span></div>'
-	printf '<div class="cfrow"><span>Zone</span><span class="cb on">Read</span><span class="cb">Edit</span></div></div></li>'
-	printf '<li>Leave <b>Token expiration</b> empty.</li>'
-	printf '<li><b>Client IP Address Filtering</b> <span class="tag rec">Optional, recommended</span><br>Choose <b>Is in</b> and add your public IP address. Update it if your IP changes.<br>'
-	button_form ip "Show my public IP"
-	printf '%s</li>' "$IP_RESULT"
-	printf '<li>Click <b>Create Token</b>, copy the token (it is shown only once) and paste it in <a href="%s?tab=settings">Settings</a>.</li>' "$SELF"
+	ezone=$(esc "${zone:-your domain}")
+	lnk() { printf '<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>' "$1" "$2"; }
+	case $1 in
+	cloudflare)
+		printf '<li>In Cloudflare, open %s and click <b>Create Token</b>.</li>' "$(lnk https://dash.cloudflare.com/profile/api-tokens 'My Profile → API Tokens')"
+		printf '<li><b>Token name:</b> for example <code>LegoCert NAS</code>.</li>'
+		if [ -n "$zone" ]; then
+			printf '<li>Under <b>Policies</b>, set <b>Include → Specific zone → %s</b> (the domain your NAS name is in).</li>' "$ezone"
+		else
+			printf '<li>Under <b>Policies</b>, set <b>Include → Specific zone →</b> the domain your NAS name is in.</li>'
+		fi
+		printf '<li>Open <b>DNS &amp; Zones</b> and tick only these two:'
+		printf '<div class="cf"><div class="cfrow"><span>DNS</span><span class="cb">Read</span><span class="cb on">Edit</span></div>'
+		printf '<div class="cfrow"><span>Zone</span><span class="cb on">Read</span><span class="cb">Edit</span></div></div></li>'
+		printf '<li>Leave <b>Token expiration</b> empty.</li>'
+		printf '<li><b>Client IP Address Filtering</b> <span class="tag rec">Optional, recommended</span><br>Choose <b>Is in</b> and add your public IP address. Update it if your IP changes.<br>'
+		button_form ip "Show my public IP"
+		printf '%s</li>' "$IP_RESULT"
+		printf '<li>Click <b>Create Token</b>, copy the token (it is shown only once) and paste it below.</li>'
+		;;
+	duckdns)
+		printf '<li>Sign in at %s.</li>' "$(lnk https://www.duckdns.org/ duckdns.org)"
+		printf '<li>Copy the <b>token</b> shown at the top of the page and paste it below.</li>'
+		printf '<li>Your NAS name must be a DuckDNS name, like <code>mynas.duckdns.org</code>.</li>'
+		;;
+	porkbun)
+		printf '<li>In Porkbun, open %s, enter a title such as <code>LegoCert NAS</code> and click <b>Create API Key</b>.</li>' "$(lnk https://porkbun.com/account/api 'Account → API Access')"
+		printf '<li>Copy the <b>API key</b> and the <b>secret key</b> (shown only once).</li>'
+		printf '<li>In <b>Domain Management</b>, open <b>Details</b> for %s and turn on <b>API Access</b>.</li>' "$ezone"
+		;;
+	route53)
+		printf '<li>In AWS, open %s and create a user such as <code>legocert-nas</code>, without console access.</li>' "$(lnk https://console.aws.amazon.com/iam/home#/users 'IAM → Users')"
+		printf '<li>Add an inline policy with this JSON. Replace <code>ZONE_ID</code> with the ID of %s in <b>Route 53 → Hosted zones</b>.' "$ezone"
+		printf '<pre>{"Version": "2012-10-17", "Statement": [\n {"Effect": "Allow", "Action": "route53:GetChange", "Resource": "arn:aws:route53:::change/*"},\n {"Effect": "Allow", "Action": ["route53:ChangeResourceRecordSets", "route53:ListResourceRecordSets"],\n  "Resource": "arn:aws:route53:::hostedzone/ZONE_ID"},\n {"Effect": "Allow", "Action": "route53:ListHostedZonesByName", "Resource": "*"}]}</pre></li>'
+		printf '<li>Under <b>Security credentials</b>, create an <b>access key</b> (use case: <b>Other</b>). Copy both values, and the hosted zone ID.</li>'
+		;;
+	digitalocean)
+		printf '<li>In DigitalOcean, open %s and click <b>Generate New Token</b>.</li>' "$(lnk https://cloud.digitalocean.com/account/api/tokens 'API → Tokens')"
+		printf '<li>Name it <code>LegoCert NAS</code>, set <b>Expiration</b> to <b>No expiry</b>, and under <b>Custom Scopes</b> tick only <b>domain</b> (all).</li>'
+		printf '<li>Click <b>Generate Token</b> and copy it (shown only once).</li>'
+		;;
+	hetzner)
+		printf '<li>In %s, open the project that holds %s in its DNS.</li>' "$(lnk https://console.hetzner.com/ 'Hetzner Console')" "$ezone"
+		printf '<li>Open <b>Security → API tokens</b> and click <b>Generate API token</b>.</li>'
+		printf '<li>Name it <code>LegoCert NAS</code>, choose <b>Read &amp; Write</b>, and copy the token (shown only once).</li>'
+		printf '<li><span class="tag rec">Recommended</span> The token can change everything in the project. Keep the DNS zone in a project of its own.</li>'
+		;;
+	ovh)
+		printf '<li>Open the token page for your region: %s, %s or %s.</li>' "$(lnk https://eu.api.ovh.com/createToken/ Europe)" "$(lnk https://ca.api.ovh.com/createToken/ Canada)" "$(lnk https://api.us.ovhcloud.com/createToken/ US)"
+		printf '<li>Name the application <code>LegoCert NAS</code>, set <b>Validity</b> to <b>Unlimited</b>, and add <b>GET</b>, <b>PUT</b>, <b>POST</b> and <b>DELETE</b>, each for <code>/domain/zone/*</code>.</li>'
+		printf '<li>Click <b>Create</b> and copy the application key, application secret and consumer key.</li>'
+		;;
+	gandiv5)
+		printf '<li>In %s, open <b>Personal Access Tokens</b> and click <b>Create a token</b>.</li>' "$(lnk https://admin.gandi.net/ 'Gandi')"
+		printf '<li>Choose your organization, restrict it to %s, and tick only <b>Manage domain name technical configurations</b>.</li>' "$ezone"
+		printf '<li>Copy the token (shown only once). Gandi tokens expire: make a new one before then.</li>'
+		;;
+	desec)
+		printf '<li>In deSEC, open %s and click <b>+</b> to create a token.</li>' "$(lnk https://desec.io/tokens 'Token Management')"
+		printf '<li>Copy the token secret (shown only once).</li>'
+		;;
+	other)
+		printf '<li>Find your DNS provider in %s and note its <b>Code</b>.</li>' "$(lnk https://go-acme.github.io/lego/dns/ "lego's provider list")"
+		printf '<li>Enter the code below, and the variables its page lists under <b>Credentials</b>, one per line as <code>NAME=value</code>.</li>'
+		;;
+	esac
+}
+
+# The provider this page shows: ?p=, the one being saved, or the saved one.
+shown_provider() {
+	sp=${SHOWN:-$(query_param p)}
+	is_known_provider "$sp" || [ "$sp" = other ] || sp=""
+	[ -n "$sp" ] || { if is_known_provider "$DNS_PROVIDER"; then sp=$DNS_PROVIDER; else sp=other; fi; }
+	printf '%s' "$sp"
+}
+
+tab_provider() {
+	title "DNS provider"
+	sp=$(shown_provider)
+	saved_here=""
+	if [ "$sp" = "$DNS_PROVIDER" ] || { [ "$sp" = other ] && ! is_known_provider "$DNS_PROVIDER"; }; then saved_here=1; fi
+	printf '<p class="desc">LegoCert proves you own the NAS name by adding a temporary DNS record. It needs access to the DNS of the domain the name is in.</p>'
+	printf '<div class="panel"><div class="body"><form class="pick" method="get" action="%s"><input type="hidden" name="tab" value="provider"><label for="p">Domain DNS is at:</label><select id="p" name="p">' "$SELF"
+	for c in $PROVIDERS other; do
+		if [ "$c" = other ]; then l="Other (advanced)"; else l=$(provider_label "$c"); fi
+		sel=""; [ "$c" = "$sp" ] && sel=" selected"
+		printf '<option value="%s"%s>%s</option>' "$c" "$sel" "$(esc "$l")"
+	done
+	printf '</select><button class="btn" type="submit">Show</button></form>'
+	[ "$sp" = cloudflare ] || printf '<p class="hint">Only Cloudflare has been tried on a real NAS so far. Use Test run before Renew now.</p>'
+	printf '</div></div>'
+
+	if [ "$sp" = other ]; then plabel="your provider"; else plabel=$(provider_label "$sp"); fi
+	printf '<div class="panel"><h3>Create access in %s</h3><div class="body"><ol class="steps">' "$(esc "$plabel")"
+	provider_steps "$sp"
 	printf '</ol></div></div>'
+
+	if [ -z "$saved_here" ] && provider_ready; then
+		note info "Applying switches from $(esc "$(provider_label "$DNS_PROVIDER")") to $(esc "$plabel"), and removes the saved $(esc "$(provider_label "$DNS_PROVIDER")") credentials."
+	fi
+	printf '<form method="post" action="%s" autocomplete="off"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="action" value="save_provider"><input type="hidden" name="provider" value="%s">' "$SELF" "$CSRF" "$sp"
+	printf '<div class="panel"><h3>Credentials</h3><div class="body">'
+	if [ "$sp" = other ]; then
+		code=""; is_known_provider "$DNS_PROVIDER" || code=$DNS_PROVIDER
+		bad=""; [ "${ERR_FIELD:-}" = other_code ] && bad=' class="bad"'
+		printf '<div class="row"><label for="other_code">Provider code:</label><div class="ctl"><input%s type="text" id="other_code" name="other_code" value="%s" placeholder="e.g. namesilo"></div></div>' "$bad" "$(esc "$code")"
+		hint="One per line, e.g. <code>NAMESILO_API_KEY=…</code>"
+		[ -n "$saved_here" ] && [ -n "$CREDS" ] && hint="Saved: $(esc "$(cred_names | sed 's/ /, /g')"). Leave empty to keep, or enter all of them again."
+		bad=""; [ "${ERR_FIELD:-}" = other_env ] && bad=' class="bad"'
+		printf '<div class="row"><label for="other_env">Variables:</label><div class="ctl"><textarea%s id="other_env" name="other_env" spellcheck="false" placeholder="NAME=value"></textarea><p class="hint">%s</p></div></div>' "$bad" "$hint"
+	else
+		old_ifs=$IFS
+		IFS='
+'
+		for f in $(provider_fields "$sp"); do
+			name=${f%%|*} kind=$(printf '%s' "$f" | cut -d'|' -f2) label=${f##*|}
+			cur=""; [ -n "$saved_here" ] && cur=$(cred_get "$name")
+			bad=""; [ "${ERR_FIELD:-}" = "cred:$name" ] && bad=' class="bad"'
+			printf '<div class="row"><label for="f_%s">%s:</label><div class="ctl">' "$name" "$(esc "$label")"
+			case $kind in
+			secret)
+				printf '<input%s type="password" id="f_%s" name="f_%s" value="" autocomplete="new-password">' "$bad" "$name" "$name"
+				[ -n "$cur" ] && printf '<p class="hint">Saved (ends %s). Leave empty to keep.</p>' "$(esc "$(printf '%s' "$cur" | tail -c 4)")"
+				;;
+			ovh-endpoint)
+				printf '<select%s id="f_%s" name="f_%s">' "$bad" "$name" "$name"
+				for o in "ovh-eu|Europe" "ovh-ca|Canada" "ovh-us|US"; do
+					sel=""; [ "${o%%|*}" = "$cur" ] && sel=" selected"
+					printf '<option value="%s"%s>%s</option>' "${o%%|*}" "$sel" "${o#*|}"
+				done
+				printf '</select>'
+				;;
+			*)
+				printf '<input%s type="text" id="f_%s" name="f_%s" value="%s">' "$bad" "$name" "$name" "$(esc "$cur")"
+				[ "$kind" = optional ] && printf '<p class="hint">Optional.</p>'
+				;;
+			esac
+			printf '</div></div>'
+		done
+		IFS=$old_ifs
+	fi
+	printf '</div><div class="actions"><button class="btn primary" type="submit">Apply</button></div></div></form>'
+
+	if [ "$sp" = cloudflare ] && [ -n "$saved_here" ] && [ -n "$(cred_get CLOUDFLARE_DNS_API_TOKEN)" ]; then
+		printf '<div class="panel"><h3>Check token</h3><div class="body"><p class="desc">Checks that the token works and can reach only one domain.</p>'
+		button_form check_token "Check token"
+		printf '%s</div></div>' "$CHECK_RESULT"
+	fi
 }
 
 tab_settings() {
 	title "Settings"
-	if [ -n "$CF_DNS_TOKEN" ]; then
-		tok_state="Saved (ends $(esc "$(printf '%s' "$CF_DNS_TOKEN" | tail -c 4)")). Leave empty to keep."
+	if provider_ready; then
+		dns_state="$(esc "$(provider_label "$DNS_PROVIDER")"). <a href=\"$SELF?tab=provider\">Change</a>"
 	else
-		tok_state="Not set. <a href=\"$SELF?tab=token\">How to create one</a>"
+		dns_state="Not set up. <a href=\"$SELF?tab=provider\">Set it up</a>"
 	fi
 	# Suggest the name this page was opened with, if it is a name (not an IP). Shown as
 	# placeholder text only (escaped); never saved unless the user types it.
@@ -384,8 +520,8 @@ tab_settings() {
 	case $host in *.*[A-Za-z]* | *[A-Za-z]*.*) case ${host##*.} in *[A-Za-z]*) ;; *) host="" ;; esac ;; *) host="" ;; esac
 	case $host in *[!A-Za-z0-9.-]*) host="" ;; esac
 	placeholder=${host:-nas.example.com}
-	bad_domain="" bad_email="" bad_token=""
-	case ${ERR_FIELD:-} in domain) bad_domain=' class="bad"' ;; email) bad_email=' class="bad"' ;; token) bad_token=' class="bad"' ;; esac
+	bad_domain="" bad_email=""
+	case ${ERR_FIELD:-} in domain) bad_domain=' class="bad"' ;; email) bad_email=' class="bad"' ;; esac
 	cat <<EOF
 <form method="post" action="$SELF" autocomplete="off">
 <input type="hidden" name="csrf" value="$CSRF"><input type="hidden" name="action" value="save">
@@ -396,14 +532,9 @@ tab_settings() {
 <div class="row"><label for="email">Email:</label><div class="ctl">
 <input$bad_email type="email" id="email" name="email" value="$(esc "$EMAIL")" placeholder="you@example.com" required>
 <p class="hint">For your Let's Encrypt account.</p></div></div>
-<div class="row"><label for="token">Cloudflare API token:</label><div class="ctl">
-<input$bad_token type="password" id="token" name="token" value="" placeholder="cfut_…" autocomplete="new-password">
-<p class="hint">$tok_state</p></div></div>
+<div class="row"><span class="lbl">DNS provider:</span><div class="ctl" style="padding-top:7px">$dns_state</div></div>
 </div><div class="actions"><button class="btn primary" type="submit">Apply</button></div></div></form>
 EOF
-	printf '<div class="panel"><h3>Check token</h3><div class="body"><p class="desc">Checks that the token works and can reach only one domain.</p>'
-	button_form check_token "Check token"
-	printf '%s</div></div>' "$CHECK_RESULT"
 }
 
 tab_notify() {
@@ -513,7 +644,7 @@ run_status() {
 		case $stage in
 		Starting) ST_MSG="Starting…" ;;
 		"Renewal due?") ST_MSG="Checking with Let's Encrypt whether a renewal is due…" ;;
-		"DNS record") ST_MSG="Adding a temporary DNS record in Cloudflare…" ;;
+		"DNS record") ST_MSG="Adding a temporary DNS record in $(provider_label "$DNS_PROVIDER")…" ;;
 		"Let's Encrypt check") ST_MSG="Waiting for Let's Encrypt to see the DNS record. This usually takes under a minute." ;;
 		Certificate) ST_MSG="Getting the certificate…" ;;
 		*) ST_MSG="Working…" ;;
@@ -524,12 +655,22 @@ run_status() {
 
 # A plain-English reason for a failed run, from what lego and LegoCert logged.
 friendly_error() {
+	pl=$(provider_label "$DNS_PROVIDER")
 	if has '9109' || has 'Cannot use the access token from location'; then
 		echo "Cloudflare refused the token from this NAS's internet address. Check the token's IP filter."
 	elif has 'Invalid API Token' || has 'Authentication error' || has 'Invalid request headers'; then
-		echo "Cloudflare rejected the token. Check it in Settings, then use Check token."
-	elif has 'could not find zone' || has 'zone could not be found' || has 'unable to find zone'; then
-		echo "Cloudflare couldn't find the domain for this NAS name. Check the token's zone."
+		echo "Cloudflare rejected the token. Check it under DNS provider, then use Check token."
+	elif has 'credentials information are missing' || has 'missing authentication information'; then
+		echo "Some $pl credentials are missing. Check them under DNS provider."
+	elif has 'InvalidClientTokenId' || has 'SignatureDoesNotMatch' || has 'AccessDenied' || has 'status code 401' || has 'status code 403' ||
+		has '401 Unauthorized' || has '403 Forbidden' || has 'nvalid API key' || has 'nvalid token' || has 'nvalid credentials'; then
+		echo "$pl rejected the credentials. Check them under DNS provider."
+	elif has 'could not find zone' || has 'zone could not be found' || has 'unable to find zone' || has 'zone not found'; then
+		if [ "$DNS_PROVIDER" = cloudflare ]; then
+			echo "Cloudflare couldn't find the domain for this NAS name. Check the token's zone."
+		else
+			echo "$pl couldn't find the domain for this NAS name. Check that it's in this account."
+		fi
 	elif has 'time limit exceeded'; then
 		echo "The DNS record didn't show up in time. Try again in a few minutes."
 	elif has 'rateLimited' || has 'too many'; then
@@ -539,7 +680,7 @@ friendly_error() {
 	elif has 'did not serve the new certificate'; then
 		echo "QTS didn't pick up the new certificate, so the previous one was put back. It will be retried tomorrow."
 	elif has 'no such host' || has 'connection refused' || has 'i/o timeout' || has 'network is unreachable'; then
-		echo "Couldn't reach Let's Encrypt or Cloudflare. Check the NAS's internet connection."
+		echo "Couldn't reach Let's Encrypt or $pl. Check the NAS's internet connection."
 	elif has 'Settings: '; then
 		printf '%s' "$seg" | sed -n 's/.*Settings: //p' | head -n 1
 	else
@@ -622,8 +763,9 @@ read_conf 2>/dev/null || CONF_ERR=$ERR
 [ -f "$CONF" ] && ! conf_perms_ok && CONF_ERR="legocert.conf has the wrong owner or permissions; applying the settings fixes this."
 
 TAB=$(query_param tab)
-case $TAB in overview | token | settings | notify) ;; *)
-	if [ -z "$CF_DNS_TOKEN" ]; then TAB=token; else TAB=overview; fi
+[ "$TAB" = token ] && TAB=provider # before 0.6: "Cloudflare token"
+case $TAB in overview | provider | settings | notify) ;; *)
+	if provider_ready; then TAB=overview; else TAB=provider; fi
 	;;
 esac
 IP_RESULT=""
@@ -642,17 +784,101 @@ if [ "${REQUEST_METHOD:-GET}" = POST ]; then
 		TAB=settings
 		DOMAIN=$(field domain)
 		EMAIL=$(field email)
-		new_token=$(field token | tr -d ' \r\n\t')
-		[ -n "$new_token" ] && CF_DNS_TOKEN=$new_token
-		if validate_conf; then
+		if validate_conf settings; then
 			write_conf || fail_page "500 Internal Server Error" "Could not write the settings file."
 			log "settings saved from the settings page (user: $(cookie NAS_USER))"
 			redirect settings saved
 		fi
 		CONF_ERR=$ERR
 		;;
+	save_provider)
+		TAB=provider
+		SHOWN=$(field provider)
+		if [ "$SHOWN" = other ]; then
+			newp=$(field other_code | tr -d ' \r\n\t' | tr 'A-Z' 'a-z')
+		elif is_known_provider "$SHOWN"; then
+			newp=$SHOWN
+		else
+			fail_page "400 Bad Request" "Unknown DNS provider."
+		fi
+		# Switching providers drops the old one's credentials.
+		[ "$newp" = "$DNS_PROVIDER" ] || CREDS=""
+		DNS_PROVIDER=$newp
+		ERR="" ERR_FIELD=""
+		if [ "$SHOWN" = other ]; then
+			if is_known_provider "$newp"; then
+				ERR="$(provider_label "$newp") is in the list: choose it there." ERR_FIELD=other_code
+			fi
+			envs=$(field other_env | tr -d '\r')
+			if [ -z "$ERR" ] && [ -n "$(printf '%s' "$envs" | tr -d ' \n\t')" ]; then
+				CREDS=""
+				old_ifs=$IFS
+				IFS='
+'
+				for l in $envs; do
+					l=$(printf '%s' "$l" | sed 's/^[ \t]*//; s/[ \t]*$//')
+					[ -n "$l" ] || continue
+					n=${l%%=*} v=${l#*=}
+					case $n in '' | [!A-Z]* | *[!A-Z0-9_]*)
+						ERR="Enter each variable as NAME=value." ERR_FIELD=other_env
+						break
+						;;
+					esac
+					if [ "$n" = "$l" ] || reserved_var "$n"; then
+						ERR="Enter each variable as NAME=value." ERR_FIELD=other_env
+						reserved_var "$n" && ERR="$n can't be set here."
+						break
+					fi
+					cred_set "$n" "$v"
+				done
+				IFS=$old_ifs
+			fi
+			# Only variables lego documents for this provider.
+			if [ -z "$ERR" ] && validate_conf provider; then
+				if ! help=$("$QPKG_ROOT/lego" dnshelp --code "$DNS_PROVIDER" 2>&1); then
+					ERR="lego has no DNS provider with the code $DNS_PROVIDER." ERR_FIELD=other_code
+				else
+					for n in $(cred_names); do
+						printf '%s' "$help" | grep -q "\"$n\"" && continue
+						ERR="$DNS_PROVIDER doesn't use $n. Check the names on its lego page." ERR_FIELD=other_env
+						break
+					done
+				fi
+			fi
+		else
+			old_ifs=$IFS
+			IFS='
+'
+			for f in $(provider_fields "$newp"); do
+				name=${f%%|*} kind=$(printf '%s' "$f" | cut -d'|' -f2)
+				v=$(field "f_$name")
+				# A line break inside a value (not just at the end of a paste): refuse, don't join.
+				if [ "$v" != "$(printf '%s' "$v" | tr -d '\r\n')" ]; then
+					ERR="The $(field_phrase "${f##*|}") has unexpected characters. Paste only the value." ERR_FIELD="cred:$name"
+					break
+				fi
+				case $kind in
+				secret)
+					v=$(printf '%s' "$v" | tr -d ' \t')
+					[ -z "$v" ] || cred_set "$name" "$v" # empty: keep the saved one
+					;;
+				*) cred_set "$name" "$(printf '%s' "$v" | sed 's/^[ \t]*//; s/[ \t]*$//')" ;;
+				esac
+			done
+			IFS=$old_ifs
+		fi
+		if [ -z "$ERR" ] && validate_conf provider; then
+			write_conf || fail_page "500 Internal Server Error" "Could not write the settings file."
+			log "DNS provider settings saved ($DNS_PROVIDER) from the settings page (user: $(cookie NAS_USER))"
+			redirect provider saved
+		fi
+		# Show the error against what is actually saved, not the rejected input.
+		CONF_ERR=$ERR keep_field=$ERR_FIELD
+		read_conf 2>/dev/null
+		ERR_FIELD=$keep_field
+		;;
 	check_token)
-		TAB=settings
+		TAB=provider
 		if out=$("$QPKG_ROOT/renew.sh" --check-token 2>&1); then
 			CHECK_RESULT="<div style=\"margin-top:12px\">$(note ok "<pre>$(esc "$out")</pre>")</div>"
 		else
@@ -670,7 +896,7 @@ if [ "${REQUEST_METHOD:-GET}" = POST ]; then
 		redirect overview renew "$since"
 		;;
 	ip)
-		TAB=token
+		TAB=provider
 		v4=$(curl -4 -sS -m 6 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | sed -n 's/^ip=//p')
 		v6=$(curl -6 -sS -m 6 'https://[2606:4700:4700::1111]/cdn-cgi/trace' 2>/dev/null | sed -n 's/^ip=//p')
 		IP_RESULT="<table class=\"grid\"><tr><th>IPv4</th><td><code>$(esc "${v4:-none found}")</code></td></tr><tr><th>IPv6</th><td><code>$(esc "${v6:-none found (fine if your network has no IPv6)}")</code></td></tr></table>"
@@ -697,7 +923,7 @@ headers "200 OK"
 page_start "$TAB"
 case $TAB in
 overview) tab_overview ;;
-token) tab_token ;;
+provider) tab_provider ;;
 settings) tab_settings ;;
 notify) tab_notify ;;
 esac
