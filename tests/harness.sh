@@ -564,6 +564,11 @@ r=$(cgi_post "$ADMIN" "csrf=$CSRF&action=save" 999999)
 check "oversized request -> 413" [ "$(status_of "$r")" = 413 ]
 
 section "15. other DNS providers"
+check "provider_uses: no broken-pipe noise with SIGPIPE ignored (as under QTS), right answers" sh -c 'trap "" PIPE; . "$1/common.sh"
+	e=$(for i in $(seq 200); do provider_uses cloudflare CLOUDFLARE_DNS_API_TOKEN || exit 1; done 2>&1) || exit 1
+	[ -z "$e" ] || exit 1
+	provider_uses cloudflare CLOUDFLARE_ZONE_API_TOKEN && provider_uses porkbun PORKBUN_SECRET_API_KEY || exit 1
+	! provider_uses cloudflare PORKBUN_API_KEY && ! provider_uses cloudflare "" && ! provider_uses cloudflare CLOUDFLARE' _ "$ROOT"
 reset_box old; issue new
 pp() { cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&$1"; }   # save on the DNS provider page
 r=$(cgi_get "$ADMIN" "tab=provider&p=porkbun")

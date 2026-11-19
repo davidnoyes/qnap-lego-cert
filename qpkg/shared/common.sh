@@ -80,7 +80,13 @@ cred_names() { printf '%s\n' "$CREDS" | sed -n 's/=.*//p' | tr '\n' ' ' | sed 's
 
 # Does a named provider use this variable? (Other providers: checked against lego when saved.)
 provider_uses() { # provider_uses CODE NAME
-	{ provider_fields "$1" | cut -d'|' -f1; provider_extra_vars "$1"; } | grep -qx "$2"
+	# No `| grep -q`: it exits at the first match and the echo still writing to the
+	# pipe prints "write error: Broken pipe" (seen in Check token on the NAS).
+	[ -n "$2" ] || return 1
+	case " $(provider_fields "$1" | cut -d'|' -f1 | tr '\n' ' ') $(provider_extra_vars "$1") " in
+	*" $2 "*) return 0 ;;
+	*) return 1 ;;
+	esac
 }
 # A field's label for messages: "Secret key" -> "secret key", "API key" stays.
 field_phrase() { # field_phrase LABEL
