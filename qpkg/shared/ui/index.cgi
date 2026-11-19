@@ -593,8 +593,8 @@ render_progress() {
 banner() {
 	case $1 in
 	saved) note ok "Settings applied." ;;
-	staging) note ok "Test run started. Progress shows under Run now." ;;
-	renew) note ok "Renew now started. Progress shows under Run now." ;;
+	staging) note ok "Test run started." ;;
+	renew) note ok "Renew now started." ;;
 	esac
 }
 

@@ -31,8 +31,9 @@ A daily cron job runs `renew.sh`, which converges the NAS on a valid certificate
 
    There's no lego deploy hook. Because this check runs every day, a failed install, or a
    firmware update that resets `/etc/stunnel`, gets fixed on the next run.
-3. **Expiry check.** Looks at the certificate QTS actually serves: a warning under 21
-   days, an error under 7 days or once expired.
+3. **Expiry check.** Looks at the certificate QTS actually serves: a warning once under
+   a quarter of its lifetime is left (about 22 days for a 90-day certificate), an error
+   under an eighth (about 11 days) or once expired.
 
 **Settings page.** Opened from App Center (*Open*), administrators only, styled like QTS 5's
 own apps (QuLog Center layout, QTS Font). Sidebar: Overview (certificate status, Test run,
