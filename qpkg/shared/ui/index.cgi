@@ -16,6 +16,7 @@
 
 QPKG_NAME=LegoCert
 QPKG_ROOT=$(/sbin/getcfg "$QPKG_NAME" Install_Path -f /etc/config/qpkg.conf)
+QPKG_VERSION=$(/sbin/getcfg "$QPKG_NAME" Version -d "" -f /etc/config/qpkg.conf)
 . "$QPKG_ROOT/common.sh"
 
 SELF=/cgi-bin/qpkg/LegoCert/index.cgi
@@ -45,6 +46,7 @@ body{font:15px/1.5 "QTS Font",Roboto,Arial,sans-serif;color:var(--text);backgrou
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 .appbar{height:52px;background:var(--bar);color:#fff;display:flex;align-items:center;gap:12px;padding:0 18px;font-size:22px;font-weight:700}
 .appbar svg{width:34px;height:34px;flex:none}
+.appbar .ver{font-size:13px;font-weight:400;opacity:.75;margin-left:-4px;padding-top:7px}
 .layout{display:flex;min-height:calc(100% - 52px)}
 .side{width:220px;flex:none;background:linear-gradient(180deg,var(--side1),var(--side2));color:#fff;padding:10px 0}
 .side .grp{display:flex;align-items:center;gap:10px;padding:10px 18px 4px;font-size:16px;font-weight:700}
@@ -139,7 +141,7 @@ page_start() { # page_start CURRENT_TAB
 <title>LegoCert</title>
 <link rel="stylesheet" href="/v3_menu/css/qts-font.css">
 <style>$STYLE</style></head><body>
-<div class="appbar">$ICON_APP LegoCert</div>
+<div class="appbar">$ICON_APP LegoCert<span class="ver">$(esc "$QPKG_VERSION")</span></div>
 <div class="layout">
 EOF
 	[ -n "${1:-}" ] && side_nav "$1"

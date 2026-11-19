@@ -34,6 +34,7 @@ cat >/sbin/getcfg <<'EOF'
 case "$1 $2" in
 "LegoCert Install_Path") echo /qpkg ;;
 "LegoCert Enable") echo TRUE ;;
+"LegoCert Version") echo 9.8.7 ;;
 "Stunnel Port") echo 8443 ;;
 *)	# like the real getcfg: print the -d default if given
 	d=""; while [ $# -gt 0 ]; do [ "$1" = -d ] && d=$2; shift; done
@@ -313,7 +314,7 @@ post_install $P
 check "upgrade keeps current settings" grep -q '^CLOUDFLARE_DNS_API_TOKEN=cfut_current$' $P/legocert.conf
 check "the package no longer ships legocert.conf" [ ! -e /src/qpkg/shared/legocert.conf ]
 check "qpkg.cfg has no QPKG_CONFIG" sh -c '! grep -q "^QPKG_CONFIG=" /src/qpkg/qpkg.cfg'
-check "App Center name is short and carries the version" sh -c 'v=$(sed -n "s/^QPKG_VER=\"\(.*\)\"$/\1/p" /src/qpkg/qpkg.cfg); grep -qx "QPKG_DISPLAY_NAME=\"LegoCert $v\"" /src/qpkg/qpkg.cfg'
+check "App Center name is plain (App Center shows the version itself)" grep -qx 'QPKG_DISPLAY_NAME="LegoCert"' /src/qpkg/qpkg.cfg
 
 section "12. staging run installs nothing"
 reset_box old; issue new
@@ -401,6 +402,7 @@ r=$(cgi_get 'NAS_SID=abc"><x'); check "malformed session cookie -> 401" [ "$(sta
 echo "$admin_xml" >"$FIX/auth.xml"
 r=$(cgi_get "$ADMIN")
 check "admin -> 200" [ "$(status_of "$r")" = 200 ]
+check "title bar shows the installed version" has "$r" 'LegoCert<span class="ver">9.8.7</span>'
 check "session checked on loopback, not the request's Host" \
 	sh -c 'grep -q "127.0.0.1:.*authLogin.cgi?sid=abc123sid" /tmp/curl_stdin && ! grep -q evil.example /tmp/curl_stdin'
 check "session id not on curl's command line" sh -c '! grep -q abc123sid /tmp/curl_calls'

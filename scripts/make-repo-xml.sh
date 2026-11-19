@@ -43,7 +43,7 @@ cp assets/icon_80.png assets/icon_100.png "$out"/
 <plugins>
   <cachechk>$(date -u +%Y%m%d%H%M%S)</cachechk>
   <item>
-    <name>LegoCert ${version}</name>
+    <name>LegoCert</name>
     <internalName>LegoCert</internalName>
     <changeLog>https://github.com/${repo}/releases/tag/${tag}</changeLog>
     <category>Security</category>
