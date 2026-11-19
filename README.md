@@ -126,6 +126,11 @@ make build    # fetch + verify lego (version from tools/go.mod), build the QDK i
    LegoCert then appears in App Center (under *LegoCert*); install it from there. New
    versions show up in App Center as updates, like QNAP's own apps.
 
+   App Center re-downloads a repository's feed on its own schedule, not when you click
+   refresh (that only redraws from its cached copy), so a new version can take a while to
+   appear. To check now, delete the cached copy over SSH, then refresh App Center:
+   `rm /tmp/rssdoc/*_eng.xml` (only App Center's working copies; it downloads them again).
+
    *Or install manually:* download `LegoCert_<version>_x86_64.qpkg` (or `arm_64`, matching
    the NAS CPU) from [Releases](https://github.com/davidnoyes/qnap-lego-cert/releases), then
    App Center → *Install Manually*.
