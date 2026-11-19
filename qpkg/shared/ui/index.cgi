@@ -9,7 +9,8 @@
 #  - DNS provider secrets are write-only: never sent back to the browser;
 #  - everything shown is HTML-escaped; inputs pass the same validate_conf as the scripts;
 #  - nothing from the request reaches a shell command line or eval;
-#  - no JavaScript at all (navigation is plain links), so CSP allows no scripts.
+#  - scripts only from this page's own small assets (progress.js, provider.js):
+#    CSP allows no inline script, and everything works without them.
 #
 # Look: QTS 5 app style (dark app bar, blue sidebar, white panels, label-left forms,
 # QTS's own "QTS Font" from /v3_menu/css/qts-font.css on the same origin).
@@ -445,8 +446,8 @@ tab_provider() {
 		sel=""; [ "$c" = "$sp" ] && sel=" selected"
 		printf '<option value="%s"%s>%s</option>' "$c" "$sel" "$(esc "$l")"
 	done
-	printf '</select><button class="btn" type="submit">Show</button></form>'
-	[ "$sp" = cloudflare ] || printf '<p class="hint">Only Cloudflare has been tried on a real NAS so far. Use Test run before Renew now.</p>'
+	printf '</select><button class="btn" id="p-show" type="submit">Show</button></form>'
+	printf '<script src="%s?asset=provider.js" defer></script>' "$SELF"
 	printf '</div></div>'
 
 	if [ "$sp" = other ]; then plabel="your provider"; else plabel=$(provider_label "$sp"); fi
@@ -455,7 +456,7 @@ tab_provider() {
 	printf '</ol></div></div>'
 
 	if [ -z "$saved_here" ] && provider_ready; then
-		note info "Applying switches from $(esc "$(provider_label "$DNS_PROVIDER")") to $(esc "$plabel"), and removes the saved $(esc "$(provider_label "$DNS_PROVIDER")") credentials."
+		note info "$(esc "$(provider_label "$DNS_PROVIDER")") stays in use until you press Apply. Applying switches to $(esc "$plabel") and removes the saved $(esc "$(provider_label "$DNS_PROVIDER")") credentials."
 	fi
 	printf '<form method="post" action="%s" autocomplete="off"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="action" value="save_provider"><input type="hidden" name="provider" value="%s">' "$SELF" "$CSRF" "$sp"
 	printf '<div class="panel"><h3>Credentials</h3><div class="body">'
@@ -742,9 +743,11 @@ banner() {
 # ===================================================================== main
 # The progress script: static, no secrets. Served by this CGI because files in
 # QTS's cgi-bin are not served as plain static files.
-if [ "$(query_param asset)" = progress.js ]; then
+asset=$(query_param asset)
+case $asset in progress.js | provider.js) ;; *) asset="" ;; esac
+if [ -n "$asset" ]; then
 	printf 'Status: 200 OK\r\nContent-Type: application/javascript; charset=utf-8\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\n\r\n'
-	cat "$QPKG_ROOT/ui/progress.js"
+	cat "$QPKG_ROOT/ui/$asset"
 	exit 0
 fi
 

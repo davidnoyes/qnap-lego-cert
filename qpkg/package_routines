@@ -36,5 +36,5 @@ pkg_post_install(){
 	[ -f "$saved.restored" ] && $CMD_CHMOD 600 "$saved.restored"
 	$CMD_CHMOD 755 "$SYS_QPKG_DIR/legocert.sh" "$SYS_QPKG_DIR/renew.sh" \
 		"$SYS_QPKG_DIR/install-cert.sh" "$SYS_QPKG_DIR/lego" "$SYS_QPKG_DIR/ui/index.cgi"
-	$CMD_CHMOD 644 "$SYS_QPKG_DIR/ui/progress.js"
+	$CMD_CHMOD 644 "$SYS_QPKG_DIR/ui/progress.js" "$SYS_QPKG_DIR/ui/provider.js"
 }

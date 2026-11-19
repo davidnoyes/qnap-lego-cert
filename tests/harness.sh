@@ -546,6 +546,10 @@ d=$(cgi_get "$ADMIN" "download=log"); check "technical log downloads as a file" 
 d=$(cgi_get "" "download=log"); check "...only when logged in" [ "$(status_of "$d")" = 401 ]
 j=$(cgi_get "" "asset=progress.js")
 check "progress.js served as JavaScript" has "$j" 'Content-Type: application/javascript'
+j2=$(cgi_get "" "asset=provider.js")
+check "provider.js served as JavaScript" has "$j2" 'Content-Type: application/javascript'
+j2=$(cgi_get "" "asset=..%2Fcommon.sh")
+check "asset endpoint serves only its two scripts" sh -c "! printf '%s' \"\$1\" | grep -q 'QPKG_ROOT'" _ "$j2"
 check "progress.js never uses innerHTML" sh -c "printf '%s' \"\$1\" | grep -q 'textContent' && ! printf '%s' \"\$1\" | grep -q '\\.innerHTML'" _ "$j"
 r=$(cgi_get "$ADMIN" "tab=log")
 check "old Log tab falls back to the Overview" has "$r" '<div class="title">Overview</div>'
@@ -565,8 +569,10 @@ pp() { cgi_post "$ADMIN" "csrf=$CSRF&action=save_provider&$1"; }   # save on the
 r=$(cgi_get "$ADMIN" "tab=provider&p=porkbun")
 check "provider list offers every named provider and Other" sh -c 'for c in cloudflare duckdns porkbun route53 digitalocean hetzner ovh gandiv5 desec other; do printf "%s" "$1" | grep -q "<option value=\"$c\"" || exit 1; done' _ "$r"
 check "?p= shows that provider's steps and fields" sh -c 'printf "%s" "$1" | grep -q "Create access in Porkbun" && printf "%s" "$1" | grep -q "name=\"f_PORKBUN_SECRET_API_KEY\""' _ "$r"
-check "...warns that switching drops the old credentials" has "$r" 'switches from Cloudflare to Porkbun'
-check "...says only Cloudflare is tried on a NAS" has "$r" 'Only Cloudflare has been tried'
+check "...says Cloudflare stays until Apply, and what Apply does" sh -c 'printf "%s" "$1" | grep -q "Cloudflare stays in use until you press Apply. Applying switches to Porkbun and removes the saved Cloudflare credentials."' _ "$r"
+check "...no 'only Cloudflare tried' line on the page" sh -c "! printf '%s' \"\$1\" | grep -q 'Only Cloudflare has been tried'" _ "$r"
+check "...viewing another provider changes nothing: Cloudflare token still saved" sh -c "grep -q '^CLOUDFLARE_DNS_API_TOKEN=tok_ABC-123\$' $ROOT/legocert.conf && ! grep -q '^DNS_PROVIDER=porkbun' $ROOT/legocert.conf"
+check "...choosing a provider loads it (provider.js), Show button as fallback" sh -c 'printf "%s" "$1" | grep -q "asset=provider.js" && printf "%s" "$1" | grep -q "id=\"p-show\""' _ "$r"
 r=$(pp "provider=porkbun&f_PORKBUN_API_KEY=pk1_abc&f_PORKBUN_SECRET_API_KEY=")
 check "missing secret key rejected, named" has "$r" 'Enter the Porkbun secret key.'
 check "...field marked" has "$r" 'class="bad" type="password" id="f_PORKBUN_SECRET_API_KEY"'
