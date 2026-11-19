@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.6.1...v0.6.2) (2026-11-19)
+
+
+### Bug Fixes
+
+* no "Broken pipe" line from Check token ([fbced61](https://github.com/davidnoyes/qnap-lego-cert/commit/fbced6174178a47b0d70b3c2e6a3d6b35466f7f4))
+
 ## [0.6.1](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.6.0...v0.6.1) (2026-11-19)
 
 
