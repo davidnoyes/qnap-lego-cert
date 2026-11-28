@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.6.2...v0.6.3) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** bump github.com/go-acme/lego/v5 from 5.6.0 to 5.7.0 in /tools ([#9](https://github.com/davidnoyes/qnap-lego-cert/issues/9)) ([7359552](https://github.com/davidnoyes/qnap-lego-cert/commit/7359552c60a2a9e39cf7c5d2d29402c4214859f8))
+
 ## [0.6.2](https://github.com/davidnoyes/qnap-lego-cert/compare/v0.6.1...v0.6.2) (2026-11-19)
 
 
